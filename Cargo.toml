@@ -1,0 +1,10 @@
+[package]
+name = "baruxn"
+version = "0.1.0"
+edition = "2021"
+authors = ["Aloïs Rautureau <alois.rautureau@ens-rennes.fr>"]
+license = "Unlicense"
+description = "An implementation of the Uxn stack machine designed to not rely on the standard library"
+
+[dependencies]
+bitflags = "2.4.2"
