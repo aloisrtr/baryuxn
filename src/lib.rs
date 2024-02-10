@@ -6,8 +6,10 @@
 //!
 //! The source is also designed to be as readable as possible.
 
+#![no_std]
+
+use core::ops::{Shl, Shr};
 use core::str;
-use std::ops::{Shl, Shr};
 
 /// The Uxn machine, able to execute [Uxntal instructions](https://wiki.xxiivv.com/site/uxntal_opcodes.html).
 pub struct UxnMachine {
@@ -56,18 +58,18 @@ impl UxnMachine {
         let (stack, pointer) = if instruction.return_mode() {
             (
                 self.return_stack.as_mut_ptr(),
-                std::ptr::from_mut(&mut self.return_pointer),
+                core::ptr::from_mut(&mut self.return_pointer),
             )
         } else {
             (
                 self.work_stack.as_mut_ptr(),
-                std::ptr::from_mut(&mut self.work_pointer),
+                core::ptr::from_mut(&mut self.work_pointer),
             )
         };
 
         let mut initial_pointer = unsafe { pointer.as_ref().cloned().unwrap() };
         let keep_pointer = if instruction.keep_mode() {
-            std::ptr::from_mut(&mut initial_pointer)
+            core::ptr::from_mut(&mut initial_pointer)
         } else {
             pointer
         };
@@ -79,7 +81,7 @@ impl UxnMachine {
             *stack.offset(*keep_pointer as isize)
         };
         // Pops the signed byte on top of the stack.
-        let pop_signed_byte = || unsafe { std::mem::transmute::<_, i8>(pop_byte()) };
+        let pop_signed_byte = || unsafe { core::mem::transmute::<_, i8>(pop_byte()) };
         // Pops the short on top of the stack.
         let pop_short = || u16::from_be_bytes([pop_byte(), pop_byte()]);
         // Pushes a byte on top of the stack.
@@ -476,8 +478,8 @@ impl UxnInstruction {
         self.intersects(Self::KEEP_MODE)
     }
 }
-impl std::fmt::Debug for UxnInstruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for UxnInstruction {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "{}{}{}{}",
