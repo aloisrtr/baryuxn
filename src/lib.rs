@@ -8,107 +8,322 @@
 
 #![no_std]
 
-use core::ops::{Shl, Shr};
+use core::ops::{Index, IndexMut};
 use core::str;
 
-/// The Uxn machine, able to execute [Uxntal instructions](https://wiki.xxiivv.com/site/uxntal_opcodes.html).
-pub struct UxnMachine {
-    work_stack: [u8; 256],
-    work_pointer: u8,
-    return_stack: [u8; 256],
-    return_pointer: u8,
-
-    memory: [u8; 0x10000],
-    _devices: [(); 16],
+pub trait UxnIndex {
+    type Output;
+    fn wrap(index: i8) -> Self;
 }
-impl Default for UxnMachine {
+impl UxnIndex for i8 {
+    type Output = u8;
+    fn wrap(index: i8) -> Self {
+        index
+    }
+}
+
+/// Specific index type indicating that we want to access bytes in a [`UxnStack`]
+/// or memory. Equivalent to using an unwrapped [`i8`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ByteIndex {
+    pub index: i8,
+}
+impl UxnIndex for ByteIndex {
+    type Output = u8;
+    fn wrap(index: i8) -> Self {
+        Self { index }
+    }
+}
+/// Specific index type indicating that we want to access shorts in a [`UxnStack`]
+/// or memory.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ShortIndex {
+    pub index: i8,
+}
+impl UxnIndex for ShortIndex {
+    type Output = u16;
+    fn wrap(index: i8) -> Self {
+        Self { index }
+    }
+}
+
+/// Stack used by the [`UxnCpu`] to hold 255 bytes of data.
+///
+/// The interface is similar to that of a circular stack, with a fixed 255 element
+/// size and some cut down functionnality.
+///
+/// All methods are provided with shorts alternatives, which as the name suggests
+/// works on shorts rather than bytes.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct UxnStack {
+    data: [u8; 0x100],
+    pointer: u8,
+}
+impl Default for UxnStack {
     fn default() -> Self {
         Self::new()
     }
 }
-impl UxnMachine {
-    pub fn new() -> Self {
+impl UxnStack {
+    /// Returns an empty `UxnStack`.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub const fn new() -> Self {
         Self {
-            work_stack: [0; 256],
-            work_pointer: 0,
-            return_stack: [0; 256],
-            return_pointer: 0,
-            memory: [0; 0x10000],
-            _devices: [(); 16],
+            pointer: 0,
+            data: [0u8; 0x100],
         }
     }
 
-    /// Creates a new [`UxnMachine`] with the given memory contents.
-    pub fn with_memory_content(memory: &[u8]) -> Self {
-        let mut uxn = Self::default();
-        memory
-            .iter()
-            .zip(&mut uxn.memory)
-            .for_each(|(src, dest)| *dest = *src);
-        uxn
+    /// Returns an iterator over the bytes of this stack, starting at the current
+    /// position of the pointer.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn iter(&self) -> UxnStackIter<'_> {}
+
+    /// Returns a mutable iterator over the bytes of this stack, starting at the current
+    /// position of the pointer.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn iter_mut(&mut self) -> UxnStackIterMut<'_> {}
+
+    /// Returns the byte at the current pointer location.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn current(&self) -> u8 {
+        self.data[self.pointer as usize]
+    }
+    /// Returns a mutable reference to the byte at the current pointer location.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn current_mut(&mut self) -> &mut u8 {
+        &mut self.data[self.pointer as usize]
     }
 
-    /// Executes a single Uxntal instruction, modifying the machine's state.
+    /// Returns the byte at the given index, offset by the current pointer
+    /// location.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn get(&self, index: i8) -> u8 {
+        self.data[self.pointer.wrapping_add_signed(index) as usize]
+    }
+
+    /// Returns a mutable reference to the byte at the given index, offset by
+    /// the current pointer location.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn get_mut(&mut self, index: i8) -> &mut u8 {
+        &mut self.data[self.pointer.wrapping_add_signed(index) as usize]
+    }
+
+    /// Pushes a byte on top of the stack.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn push(&mut self, value: u8) {
+        self.data[self.pointer as usize] = value;
+        self.pointer = self.pointer.wrapping_add(1);
+    }
+
+    /// Pops a byte from the top of the stack.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn pop(&mut self) -> u8 {
+        let value = self.data[self.pointer as usize];
+        self.pointer = self.pointer.wrapping_sub(1);
+        value
+    }
+
+    /// Pushes a short on top of the stack.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn push_short(&mut self, value: u16) {
+        self.data[self.pointer as usize] = value;
+        self.pointer = self.pointer.wrapping_add(1);
+    }
+
+    /// Pops a short from the top of the stack.
+    /// # Exemple
+    /// ```rust
+    /// ```
+    pub fn pop_short(&mut self) -> u16 {
+        let value = self.data[self.pointer as usize];
+        self.pointer = self.pointer.wrapping_sub(1);
+        value
+    }
+}
+impl Index<i8> for UxnStack {
+    type Output = u8;
+    fn index(&self, index: i8) -> &Self::Output {
+        &self.data[self.pointer.wrapping_add_signed(index) as usize]
+    }
+}
+impl IndexMut<i8> for UxnStack {
+    fn index_mut(&mut self, index: i8) -> &mut Self::Output {
+        &mut self.data[self.pointer.wrapping_add_signed(index) as usize]
+    }
+}
+impl Index<ByteIndex> for UxnStack {
+    type Output = u8;
+    fn index(&self, index: ByteIndex) -> &Self::Output {
+        self.index(index.index)
+    }
+}
+impl IndexMut<ByteIndex> for UxnStack {
+    fn index_mut(&mut self, index: ByteIndex) -> &mut Self::Output {
+        self.index_mut(index.index)
+    }
+}
+impl Index<ShortIndex> for UxnStack {
+    type Output = u16;
+    fn index(&self, index: ShortIndex) -> &Self::Output {
+        todo!()
+    }
+}
+impl IndexMut<ShortIndex> for UxnStack {
+    fn index_mut(&mut self, index: ShortIndex) -> &mut Self::Output {
+        todo!()
+    }
+}
+
+/// Structures implementing the [`UxnDevice`] trait can be connected to the a [`UxnCpu`]
+/// to offer external functionnality, such as displays, keyboards, etc.
+pub trait UxnDevice {
+    /// Reads a byte from the [`UxnDevice`].
+    fn read(&mut self, address: u8) -> u8;
+    /// Write a byte to the [`UxnDevice`].
+    fn write(&mut self, address: u8, value: u8);
+
+    fn read_slice(&mut self, address: u8, dest: &mut [u8]);
+    fn write_slice(&mut self, address: u8, value: &[u8]);
+}
+
+/// The Uxn machine, able to execute [Uxntal instructions](https://wiki.xxiivv.com/site/uxntal_opcodes.html).
+pub struct UxnMachine<'a> {
+    work_stack: UxnStack,
+    return_stack: UxnStack,
+
+    memory: [u8; 0x10000],
+    devices: [Option<&'a dyn UxnDevice>; 16],
+}
+impl Default for UxnMachine<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl<'a> UxnMachine<'a> {
+    /// Returns a new [`UxnMachine`] with no devices and a zeroed memory.
+    pub fn new() -> Self {
+        Self {
+            work_stack: UxnStack::default(),
+            return_stack: UxnStack::default(),
+            memory: [0; 0x10000],
+            devices: [None; 16],
+        }
+    }
+
+    /// Modifies the memory contents of a [`UxnMachine`].
+    pub fn with_memory_content(mut self, memory: &[u8]) -> Self {
+        memory
+            .iter()
+            .zip(&mut self.memory)
+            .for_each(|(src, dest)| *dest = *src);
+        self
+    }
+
+    /// Adds a [`UxnDevice`] to the [`UxnMachine`], associating it with the given
+    /// page.
+    pub fn with_device(mut self, device: &'a dyn UxnDevice, page: u8) -> Self {
+        self.devices[page as usize] = Some(device);
+        self
+    }
+
+    /// Executes a single Uxntal instruction given a program counter, modifying the machine's state.
     ///
     /// Returns what the program counter should be after this instruction.
     pub fn execute(&mut self, program_counter: u16) -> Option<u16> {
-        let instruction = UxnInstruction::from_bits(self.memory[program_counter as usize]).unwrap();
+        let instruction = self.memory[program_counter as usize];
 
-        // The stack to be worked on
-        let (stack, pointer) = if instruction.return_mode() {
-            (
-                self.return_stack.as_mut_ptr(),
-                core::ptr::from_mut(&mut self.return_pointer),
-            )
+        // Decode the instruction.
+        let short_mode = (instruction & 0b0010_0000) != 0;
+        let return_mode = (instruction & 0b0100_0000) != 0;
+        let keep_mode = (instruction & 0b1000_0000) != 0;
+        let is_immediate = (instruction & 0b0001_1111) == 0;
+        let operation = if is_immediate {
+            instruction
         } else {
-            (
-                self.work_stack.as_mut_ptr(),
-                core::ptr::from_mut(&mut self.work_pointer),
-            )
+            instruction & 0b0001_1111
         };
 
-        let mut initial_pointer = unsafe { pointer.as_ref().cloned().unwrap() };
-        let keep_pointer = if instruction.keep_mode() {
-            core::ptr::from_mut(&mut initial_pointer)
+        // The stack to be worked on.
+        let stack = if return_mode {
+            &mut self.return_stack
         } else {
-            pointer
-        };
-
-        // Define our general functions
-        // Pops the byte on top of the stack.
-        let pop_byte = || unsafe {
-            *keep_pointer = (*keep_pointer).wrapping_sub(1);
-            *stack.offset(*keep_pointer as isize)
-        };
-        // Pops the signed byte on top of the stack.
-        let pop_signed_byte = || unsafe { core::mem::transmute::<_, i8>(pop_byte()) };
-        // Pops the short on top of the stack.
-        let pop_short = || u16::from_be_bytes([pop_byte(), pop_byte()]);
-        // Pushes a byte on top of the stack.
-        let push_byte = |byte: u8| unsafe {
-            *pointer = (*pointer).wrapping_add(1);
-            *stack.offset((*pointer).wrapping_sub(1) as isize) = byte
-        };
-        // Pushes a short on top of the stack.
-        let push_short = |short: u16| {
-            let [low, high] = short.to_be_bytes();
-            push_byte(high);
-            push_byte(low);
-        };
-        let mut push_short_return_stack = |short: u16| {
-            let [low, high] = short.to_be_bytes();
-            self.return_stack[self.return_pointer as usize] = high;
-            self.return_pointer = self.return_pointer.wrapping_add(1);
-            self.return_stack[self.return_pointer as usize] = low;
-            self.return_pointer = self.return_pointer.wrapping_add(1);
+            &mut self.work_stack
         };
 
         // Execute the actual instruction
-        match instruction.operation_code() {
+        match operation {
+            // Immediate opcodes
+            0x00 => {
+                // BRK
+                return None;
+            }
+            0x20 => {
+                // JCI
+                return if self.work_stack.pop() == 0 {
+                    Some(program_counter.wrapping_add(u16::from_be_bytes([
+                        self.memory[program_counter.wrapping_add(1) as usize],
+                        self.memory[program_counter.wrapping_add(2) as usize],
+                    ])))
+                } else {
+                    Some(program_counter.wrapping_add(3))
+                };
+            }
+            0x40 => {
+                // JMI
+                return Some(program_counter.wrapping_add(u16::from_be_bytes([
+                    self.memory[program_counter.wrapping_add(1) as usize],
+                    self.memory[program_counter.wrapping_add(2) as usize],
+                ])));
+            }
+            0x60 => {
+                // JSI
+                self.return_stack
+                    .push(self.memory[program_counter.wrapping_add(2) as usize]);
+
+                return Some(program_counter.wrapping_add(u16::from_be_bytes([
+                    self.memory[program_counter.wrapping_add(1) as usize],
+                    self.memory[program_counter.wrapping_add(2) as usize],
+                ])));
+            }
+            0x80 | 0xa0 | 0xc0 | 0xe0 => {
+                // LIT
+                if instruction.short_mode() {
+                    push_short(u16::from_be_bytes([
+                        self.memory[program_counter.wrapping_add(1) as usize],
+                        self.memory[program_counter.wrapping_add(2) as usize],
+                    ]))
+                } else {
+                    push_byte(self.memory[program_counter.wrapping_add(1) as usize])
+                }
+                return Some(program_counter.wrapping_add(3));
+            }
+
             // General opcodes
             0x01 => {
                 // INC
-                if instruction.short_mode() {
+                stack[0] = stack[0].wrapping_add(1);
+                if short_mode {
                     push_short(pop_short().wrapping_add(1))
                 } else {
                     push_byte(pop_byte().wrapping_add(1))
@@ -297,7 +512,7 @@ impl UxnMachine {
                 self.memory[address as usize] = value;
             }
             0x16 => {
-                // DEA
+                // DEI
                 todo!()
             }
             0x17 => {
@@ -378,52 +593,6 @@ impl UxnMachine {
                 } else {
                     push_byte(pop_byte().shr(right).shl(left))
                 }
-            }
-
-            // Immediate opcodes
-            0x00 => {
-                // BRK
-                return None;
-            }
-            0x20 => {
-                // JCI
-                self.work_pointer = self.work_pointer.wrapping_sub(1);
-                return if self.work_stack[self.work_pointer as usize] != 0 {
-                    Some(program_counter.wrapping_add(u16::from_be_bytes([
-                        self.memory[program_counter.wrapping_add(1) as usize],
-                        self.memory[program_counter.wrapping_add(2) as usize],
-                    ])))
-                } else {
-                    Some(program_counter.wrapping_add(3))
-                };
-            }
-            0x40 => {
-                // JMI
-                return Some(program_counter.wrapping_add(u16::from_be_bytes([
-                    self.memory[program_counter.wrapping_add(1) as usize],
-                    self.memory[program_counter.wrapping_add(2) as usize],
-                ])));
-            }
-            0x60 => {
-                // JSI
-                push_short_return_stack(program_counter.wrapping_add(2));
-
-                return Some(program_counter.wrapping_add(u16::from_be_bytes([
-                    self.memory[program_counter.wrapping_add(1) as usize],
-                    self.memory[program_counter.wrapping_add(2) as usize],
-                ])));
-            }
-            0x80 | 0xa0 | 0xc0 | 0xe0 => {
-                // LIT
-                if instruction.short_mode() {
-                    push_short(u16::from_be_bytes([
-                        self.memory[program_counter.wrapping_add(1) as usize],
-                        self.memory[program_counter.wrapping_add(2) as usize],
-                    ]))
-                } else {
-                    push_byte(self.memory[program_counter.wrapping_add(1) as usize])
-                }
-                return Some(program_counter.wrapping_add(3));
             }
 
             _ => panic!(
