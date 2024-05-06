@@ -1,0 +1,11 @@
+[package]
+name = "baryasm"
+version = "0.1.0"
+edition = "2021"
+authors = ["Aloïs Rautureau <alois.rautureau@ens-rennes.fr>"]
+license = "Unlicense"
+description = "Efficient Uxn assembler based on parser combinators."
+
+[dependencies]
+nom = { version = "7", default-features = false }
+heapless = "0.8.0"
