@@ -1,94 +1,118 @@
-use heapless::{String, Vec};
+use heapless::String;
 
 use crate::*;
 
 #[test]
 fn test_parse_comment() {
-    let mut context = UxnTalAssemblerContext::new();
+    let mut assembler = UxnTalAssembler::<'_, 0x0>::new();
+    assert!(assembler
+        .walk_comment(&mut b" this is a comment )".iter().cloned())
+        .is_ok());
     assert_eq!(
-        parse_comment("( this is a comment )", &mut context),
-        Ok(("", ()))
-    );
-    assert_eq!(
-        parse_comment("(( this is a bad comment )", &mut context),
-        Err(UxnTalParserError::UnfinishedComment)
+        assembler.walk_comment(&mut b"( this is a bad comment )".iter().cloned()),
+        Err(UxnTalAssemblerError::UnfinishedComment)
     )
 }
 
 #[test]
 fn test_parse_nested_comment() {
-    let mut context = UxnTalAssemblerContext::new();
-    assert_eq!(
-        parse_comment("( this is a (nested) () comment )", &mut context),
-        Ok(("", ()))
-    );
+    let mut assembler = UxnTalAssembler::<'_, 0x0>::new();
+    assert!(assembler
+        .walk_comment(&mut b" this is a (nested) () comment )".iter().cloned())
+        .is_ok());
 }
 
 #[test]
 fn test_parse_hexadecimal() {
-    let mut context = UxnTalAssemblerContext::new();
+    let mut assembler = UxnTalAssembler::<'_, 0x0>::new();
+    assembler.lookahead.clear();
     assert_eq!(
-        parse_hexadecimal("1af2", &mut context),
-        Ok(("", (true, 0x1af2)))
+        assembler.parse_hexadecimal(&mut b"1Af2".iter().cloned()),
+        Ok(Either::Right(0x1af2))
     );
+    assembler.lookahead.clear();
     assert_eq!(
-        parse_hexadecimal("ff", &mut context),
-        Ok(("", (false, 0xff)))
+        assembler.parse_hexadecimal(&mut b"FF".iter().cloned()),
+        Ok(Either::Left(0xff))
     );
+    assembler.lookahead.clear();
     assert_eq!(
-        parse_hexadecimal("fg", &mut context),
-        Err(UxnTalParserError::InvalidHexadecimalDigit('g'))
+        assembler.parse_hexadecimal(&mut b"Fg".iter().cloned()),
+        Err(UxnTalAssemblerError::InvalidHexadecimalDigit('g'))
     );
+    assembler.lookahead.clear();
     assert_eq!(
-        parse_hexadecimal("1aa", &mut context),
-        Ok(("", (true, 0x01aa)))
+        assembler.parse_hexadecimal(&mut b"1AA".iter().cloned()),
+        Ok(Either::Right(0x1aa))
     );
+    assembler.lookahead.clear();
     assert_eq!(
-        parse_hexadecimal("1aafd", &mut context),
-        Ok(("d", (true, 0x1aaf)))
+        assembler.parse_hexadecimal(&mut b"1Afd8".iter().cloned()),
+        Ok(Either::Right(0x1afd))
     );
 }
 
 #[test]
 fn test_parse_instruction() {
-    let mut context = UxnTalAssemblerContext::new();
-    assert_eq!(parse_instruction("BRK", &mut context), Ok(("", 0x00)));
-    assert_eq!(parse_instruction("STH", &mut context), Ok(("", 0x0f)));
-    assert_eq!(parse_instruction("ADD2r", &mut context), Ok(("", 0x78)));
+    let mut assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
-        parse_instruction("BRK some stuff", &mut context),
-        Ok((" some stuff", 0x00))
+        assembler.write_instruction(&mut b"BRK".iter().cloned()),
+        Ok(0x00)
     );
+    assembler.lookahead.clear();
     assert_eq!(
-        parse_instruction("STH wow", &mut context),
-        Ok((" wow", 0x0f))
+        assembler.write_instruction(&mut b"STH".iter().cloned()),
+        Ok(0x0f)
     );
+    assembler.lookahead.clear();
     assert_eq!(
-        parse_instruction("ADD2kj", &mut context),
-        Err(UxnTalParserError::UnknownMode('j'))
+        assembler.write_instruction(&mut b"ADD2r".iter().cloned()),
+        Ok(0x78)
     );
+    assembler.lookahead.clear();
     assert_eq!(
-        parse_instruction("LITk", &mut context),
-        Err(UxnTalParserError::RedundantMode('k'))
+        assembler.write_instruction(&mut b"BRK some stuff".iter().cloned()),
+        Ok(0x00)
+    );
+    assembler.lookahead.clear();
+    assert_eq!(
+        assembler.write_instruction(&mut b"STH wow".iter().cloned()),
+        Ok(0x0f)
+    );
+    assembler.lookahead.clear();
+    assert_eq!(
+        assembler.write_instruction(&mut b"ADD2kj".iter().cloned()),
+        Err(UxnTalAssemblerError::UnknownMode('j'))
+    );
+    assembler.lookahead.clear();
+    assert_eq!(
+        assembler.write_instruction(&mut b"LITk".iter().cloned()),
+        Err(UxnTalAssemblerError::RedundantMode('k'))
     );
 }
 
 #[test]
 fn test_parse_lit_rune() {
-    assert_eq!(parse("#a0").unwrap().1[0x100..0x102], [0x80, 0xa0]);
-    assert_eq!(parse("#a0a0").unwrap().1[0x100..0x103], [0xa0, 0xa0, 0xa0]);
+    let assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
-        parse("#a0a0 #ff").unwrap().1[0x100..0x105],
-        [0xa0, 0xa0, 0xa0, 0x80, 0xff]
+        assembler.clone().parse_string("#Ff").unwrap()[0x100..0x102],
+        [0x80, 0xff]
+    );
+    assert_eq!(
+        assembler.clone().parse_string("#faF9").unwrap()[0x100..0x103],
+        [0xa0, 0xfa, 0xf9]
     );
 }
 
 #[test]
 fn test_parse_ascii() {
+    let assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
         &String::from_utf8(
-            Vec::<u8, 16>::from_slice(&parse("\"ohohimastringyay").unwrap().1[0x100..0x110])
-                .unwrap()
+            Vec::<u8, 16>::from_slice(
+                &assembler.parse_string("\"ohohimastringyay").unwrap()[0x100..0x110]
+            )
+            .unwrap()
         )
         .unwrap(),
         &"ohohimastringyay"
@@ -97,20 +121,83 @@ fn test_parse_ascii() {
 
 #[test]
 fn test_absolute_padding() {
+    let assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
-        parse("|105 #ff").unwrap().1[0x100..=0x106],
-        [0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xff]
+        assembler.parse_string("|10 #ff").unwrap()[0x10..0x12],
+        [0x80, 0xff]
     )
 }
 
 #[test]
-fn test_parse_identifier() {
+fn test_relative_padding() {
+    let assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
-        parse_identifier("modulo", &mut UxnTalAssemblerContext::new()),
-        Ok(("", "modulo"))
-    );
-    assert_eq!(
-        parse_identifier("modulo otherstuff", &mut UxnTalAssemblerContext::new()),
-        Ok((" otherstuff", "modulo"))
+        assembler.parse_string("$5 #ff").unwrap()[0x105..0x107],
+        [0x80, 0xff]
     )
 }
+
+// #[test]
+// fn test_parse_identifier() {
+//     assert_eq!(
+//         parse_identifier("modulo", &mut UxnTalAssembler::new()),
+//         Ok(("", "modulo"))
+//     );
+//     assert_eq!(
+//         parse_identifier("modulo otherstuff", &mut UxnTalAssembler::new()),
+//         Ok((" otherstuff", "modulo"))
+//     )
+// }
+
+// #[test]
+// fn test_parse_macro_definition() {
+//     assert_eq!(
+//         parse_macro_definition(
+//             "modulo ( num denum -- res ) {DIVk MUL SUB}",
+//             &mut UxnTalAssembler::new()
+//         ),
+//         Ok(("", ("modulo", "DIVk MUL SUB")))
+//     )
+// }
+
+/*
+ * GENERAL INTEGRATION TESTING
+ */
+
+#[test]
+fn test_result_six() {
+    let rom = UxnTalAssembler::<'_, 0>::new()
+        .parse_string("#01 DUP ADD #03 MUL ( result: 06 )")
+        .unwrap();
+    assert_eq!(
+        rom[0x100..0x107],
+        [0x80, 0x01, 0x06, 0x18, 0x80, 0x03, 0x1a]
+    );
+}
+
+// #[test]
+// fn test_hello_world_example() {
+//     let rom = parse(
+//         r#"
+//         |10 @Console &vector $2 &read $1 &pad $5 &write $1 &error $1
+
+//         |100
+
+//         @on-reset ( -> )
+//         	;my-string print-text
+//         	BRK
+
+//         @print-text ( str* -- )
+//         	&while
+//         		LDAk .Console/write DEO
+//         		INC2 LDAk ?&while
+//         	POP2
+//         	JMP2r
+
+//         @my-string
+//         	"Hello 20 "World! 00"
+//     "#,
+//     )
+//     .unwrap();
+//     assert_eq!(rom, [0u8; 0x10000]);
+// }

@@ -1,4 +1,4 @@
-//! # BaryUxn
+//! # BaryUxn: the baremetal Uxn stack machine
 //! An implementation of the [Uxn stack machine](https://wiki.xxiivv.com/site/uxn.html)
 //! designed to not rely on `std`.
 //!
@@ -12,3 +12,6 @@
 pub mod bus;
 pub mod machine;
 pub mod stack;
+
+#[cfg(test)]
+mod test;

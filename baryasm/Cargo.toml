@@ -7,5 +7,5 @@ license = "Unlicense"
 description = "Efficient Uxn assembler based on parser combinators."
 
 [dependencies]
-nom = { version = "7", default-features = false }
 heapless = "0.8.0"
+either = { version = "1.11", default-features = false }

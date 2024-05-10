@@ -1,8 +1,9 @@
+//! # Uxn stacks
 //! Uxn uses [circular stacks](https://wiki.xxiivv.com/site/uxntal_stacks.html)
 //! to hold temporary values.
 //!
 //! There are two such stacks per machine, called the *working* and *return* stacks.
-//! Items can be moved from one to the other.
+//! Items can be moved from one to the other using the `STH` operation.
 //!
 //! Values on the stacks can be read as bytes ([`u8`]) or shorts ([`u16`]) stored as
 //! two bytes interpreted in big endian fashion.
@@ -26,10 +27,11 @@ use core::{
 /// | --- | -- | -- | - | - | - | --- |
 /// | ... | 0xf0 | 0x0a | 0xab | 0x00 | 0x10 | ... |
 ///
+/// One can also index on shorts.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct UxnStack {
-    data: [u8; 0x100],
-    pointer: u8,
+    pub data: [u8; 0x100],
+    pub pointer: u8,
 }
 impl Default for UxnStack {
     /// Returns an empty [`UxnStack`].
