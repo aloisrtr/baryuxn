@@ -187,7 +187,6 @@ where
                 // INC
                 if SHORT {
                     let v = pop_short::<KEEP>(stack, &mut popped).wrapping_add(1);
-                    println!("{v}");
                     stack.push_short(v)
                 } else {
                     let v = pop::<KEEP>(stack, &mut popped).wrapping_add(1);
