@@ -7,29 +7,23 @@
 //! The trait automatically provides methods for writing and reading shorts, but these
 //! can be overriden if necessary.
 
-pub trait UxnDeviceBus {
+use crate::machine::UxnMachine;
+
+pub trait UxnDeviceBus<T> {
     // Required methods
-    fn read(&mut self, address: u8) -> u8;
-    fn write(&mut self, address: u8, byte: u8);
+    fn read(&mut self, machine: &mut UxnMachine<T>, address: u8) -> u8;
+    fn write(&mut self, machine: &mut UxnMachine<T>, address: u8, byte: u8);
 
     // Provided methods
-    fn read_short(&mut self, address: u8) -> u16 {
-        u16::from_be_bytes([self.read(address), self.read(address.wrapping_add(1))])
+    fn read_short(&mut self, machine: &mut UxnMachine<T>, address: u8) -> u16 {
+        u16::from_be_bytes([
+            self.read(machine, address),
+            self.read(machine, address.wrapping_add(1)),
+        ])
     }
-    fn write_short(&mut self, address: u8, short: u16) {
+    fn write_short(&mut self, machine: &mut UxnMachine<T>, address: u8, short: u16) {
         let [msb, lsb] = short.to_be_bytes();
-        self.write(address, msb);
-        self.write(address.wrapping_add(1), lsb);
+        self.write(machine, address, msb);
+        self.write(machine, address.wrapping_add(1), lsb);
     }
-}
-
-/// The unit type can be used for testing purposes, or for machines that have
-/// no devices attached.
-///
-/// It returns 0 on every read, and doesn't do anything on write.
-impl UxnDeviceBus for () {
-    fn read(&mut self, _address: u8) -> u8 {
-        0
-    }
-    fn write(&mut self, _address: u8, _byte: u8) {}
 }

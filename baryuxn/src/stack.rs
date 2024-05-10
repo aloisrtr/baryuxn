@@ -9,6 +9,7 @@
 //! two bytes interpreted in big endian fashion.
 
 use core::{
+    fmt::Debug,
     iter::FusedIterator,
     ops::{Index, IndexMut},
 };
@@ -28,7 +29,7 @@ use core::{
 /// | ... | 0xf0 | 0x0a | 0xab | 0x00 | 0x10 | ... |
 ///
 /// One can also index on shorts.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct UxnStack {
     pub data: [u8; 0x100],
     pub pointer: u8,
@@ -435,6 +436,15 @@ impl PartialEq<[u8; 0x100]> for UxnStack {
     /// This does not care about current top of the stack location.
     fn eq(&self, other: &[u8; 0x100]) -> bool {
         &self.data == other
+    }
+}
+impl Debug for UxnStack {
+    /// Pretty printing for Uxn stacks.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for i in -7..=1 {
+            write!(f, "{:#04x}{} ", self.get(i), if i == 0 { "|" } else { "" })?
+        }
+        Ok(())
     }
 }
 

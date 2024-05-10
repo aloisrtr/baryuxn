@@ -17,48 +17,35 @@ impl IndexMut<u16> for UxnRom {
     }
 }
 
-struct UxnTestBus<'a>(&'a mut [u8; 0x100]);
-impl<'a> UxnDeviceBus for UxnTestBus<'a> {
-    fn read(&mut self, address: u8) -> u8 {
+struct UxnTestBus([u8; 0x100]);
+impl<T> UxnDeviceBus<T> for UxnTestBus {
+    fn read(&mut self, _machine: &mut UxnMachine<T>, address: u8) -> u8 {
         self.0[address as usize]
     }
-    fn write(&mut self, address: u8, byte: u8) {
+    fn write(&mut self, _machine: &mut UxnMachine<T>, address: u8, byte: u8) {
         self.0[address as usize] = byte
-    }
-    fn read_short(&mut self, address: u8) -> u16 {
-        u16::from_be_bytes([self.read(address), self.read(address.wrapping_add(1))])
-    }
-    fn write_short(&mut self, address: u8, short: u16) {
-        let [msb, lsb] = short.to_be_bytes();
-        self.write(address, msb);
-        self.write(address.wrapping_add(1), lsb);
     }
 }
 
-fn machine_from_source<'a>(
-    source: &str,
-    devices: UxnTestBus<'a>,
-) -> UxnMachine<UxnRom, UxnTestBus<'a>> {
+fn machine_from_source(source: &str) -> UxnMachine<UxnRom> {
     let rom = UxnTalAssembler::<'_, 0>::new()
         .parse_string(source)
         .unwrap();
-    UxnMachine::new(UxnRom(rom), devices)
+    UxnMachine::new(UxnRom(rom))
 }
 fn assert_work_stack_state(source: &str, expected_stack: &[u8]) {
-    let mut devices = [0; 0x100];
-    let mut machine = machine_from_source(source, UxnTestBus(&mut devices));
-    machine.execute_vector(0x100);
+    let mut machine = machine_from_source(source);
+    machine.execute_vector(0x100, &mut UxnTestBus([0; 0x100]));
     assert_eq!(
-        &machine.work_stack().data[..expected_stack.len()],
+        &machine.work_stack.data[..expected_stack.len()],
         expected_stack
     )
 }
 fn assert_return_stack_state(source: &str, expected_stack: &[u8]) {
-    let mut devices = [0; 0x100];
-    let mut machine = machine_from_source(source, UxnTestBus(&mut devices));
-    machine.execute_vector(0x100);
+    let mut machine = machine_from_source(source);
+    machine.execute_vector(0x100, &mut UxnTestBus([0; 0x100]));
     assert_eq!(
-        &machine.return_stack().data[..expected_stack.len()],
+        &machine.return_stack.data[..expected_stack.len()],
         expected_stack
     )
 }
@@ -220,39 +207,39 @@ fn test_sta() {
 
 #[test]
 fn test_dei() {
-    let mut devices = [0; 0x100];
-    devices[0x10] = 0x34;
-    devices[0x11] = 0x56;
-    let mut machine = machine_from_source("#10 DEI", UxnTestBus(&mut devices));
-    machine.execute_vector(0x100);
-    assert_eq!(machine.work_stack().data[0], 0x34);
+    let mut devices = UxnTestBus([0; 0x100]);
+    devices.0[0x10] = 0x34;
+    devices.0[0x11] = 0x56;
+    let mut machine = machine_from_source("#10 DEI");
+    machine.execute_vector(0x100, &mut devices);
+    assert_eq!(machine.work_stack.data[0], 0x34);
 
-    let mut machine = machine_from_source("#10 DEIk", UxnTestBus(&mut devices));
-    machine.execute_vector(0x100);
-    assert_eq!(&machine.work_stack().data[0..2], &[0x10, 0x34]);
+    let mut machine = machine_from_source("#10 DEIk");
+    machine.execute_vector(0x100, &mut devices);
+    assert_eq!(&machine.work_stack.data[0..2], &[0x10, 0x34]);
 
-    let mut machine = machine_from_source("#10 DEI2", UxnTestBus(&mut devices));
-    machine.execute_vector(0x100);
-    assert_eq!(&machine.work_stack().data[0..2], &[0x34, 0x56]);
+    let mut machine = machine_from_source("#10 DEI2");
+    machine.execute_vector(0x100, &mut devices);
+    assert_eq!(&machine.work_stack.data[0..2], &[0x34, 0x56]);
 }
 
 #[test]
 fn test_deo() {
-    let mut devices = [0; 0x100];
-    devices[0x10] = 0x34;
-    devices[0x11] = 0x56;
-    let mut machine = machine_from_source("#20 #10 DEO", UxnTestBus(&mut devices));
-    machine.execute_vector(0x100);
-    assert_eq!(devices[0x10], 0x20);
+    let mut devices = UxnTestBus([0; 0x100]);
+    devices.0[0x10] = 0x34;
+    devices.0[0x11] = 0x56;
+    let mut machine = machine_from_source("#20 #10 DEO");
+    machine.execute_vector(0x100, &mut devices);
+    assert_eq!(devices.0[0x10], 0x20);
 
-    let mut machine = machine_from_source("#20 #10 DEOk", UxnTestBus(&mut devices));
-    machine.execute_vector(0x100);
-    assert_eq!(&machine.work_stack().data[0..2], &[0x20, 0x10]);
-    assert_eq!(devices[0x10], 0x20);
+    let mut machine = machine_from_source("#20 #10 DEOk");
+    machine.execute_vector(0x100, &mut devices);
+    assert_eq!(&machine.work_stack.data[0..2], &[0x20, 0x10]);
+    assert_eq!(devices.0[0x10], 0x20);
 
-    let mut machine = machine_from_source("#abcd #10 DEO2", UxnTestBus(&mut devices));
-    machine.execute_vector(0x100);
-    assert_eq!(&devices[0x10..=0x11], &[0xab, 0xcd])
+    let mut machine = machine_from_source("#abcd #10 DEO2");
+    machine.execute_vector(0x100, &mut devices);
+    assert_eq!(&devices.0[0x10..=0x11], &[0xab, 0xcd])
 }
 
 #[test]
