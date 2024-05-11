@@ -2,5 +2,5 @@
 members = [
   "baryuxn",
   "baryasm"
-]
+, "baryuxn-cli"]
 resolver = "2"

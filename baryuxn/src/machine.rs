@@ -150,10 +150,11 @@ where
                     (false, false, false) => return None, // BRK
                     (true, false, false) => {
                         // JCI
-                        return Some(if self.work_stack.pop() == 0 {
+                        return Some(if self.work_stack.pop() != 0 {
                             Self::get_memory_short(&self.memory, program_counter.wrapping_add(1))
+                                .wrapping_add(3)
                         } else {
-                            2
+                            3
                         });
                     }
                     (false, true, false) => {
@@ -166,7 +167,7 @@ where
                     (true, true, false) => {
                         // JSI
                         self.return_stack
-                            .push_short(program_counter.wrapping_add(2));
+                            .push_short(program_counter.wrapping_add(3));
                         return Some(
                             Self::get_memory_short(&self.memory, program_counter.wrapping_add(1))
                                 .wrapping_add(3),
@@ -178,7 +179,7 @@ where
                             &self.memory,
                             program_counter.wrapping_add(1),
                         ));
-                        return Some(2);
+                        return Some(3);
                     }
                     (true, _, true) => {
                         // LIT2
@@ -588,19 +589,25 @@ where
 /// Using an iterator for this allows users of the API to execute instructions step
 /// by step if they so wish.
 ///
+/// # Queuing vectors
+/// The design of some implementations, notably the Varvara ordinator, require
+/// their emulator to break evaluation to run a vector when some event happens
+/// on a device, akin to interrupts. To allow for this, vectors can be made unactive
+/// by taking their reference to the UxnMachine away for a time.
+///
 /// # [`FusedIterator`](core::iter::FusedIterator)
 /// Note that this cannot implement [`FuserIterator`](core::iter::FusedIterator).
 /// Since Uxn does not forbid self modifying code, it is possible to read a `BRK`
 /// instruction once, returning `None`, then reading a different instruction at the
 /// same location in memory later on.
 pub struct UxnVector<'a, T, B> {
-    pub(crate) machine: &'a mut UxnMachine<T>,
-    pub(crate) program_counter: u16,
-    pub(crate) device_bus: &'a mut B,
+    pub machine: &'a mut UxnMachine<T>,
+    pub program_counter: u16,
+    pub device_bus: &'a mut B,
 }
 impl<'a, T, B> UxnVector<'a, T, B> {
-    pub fn program_counter(&self) -> u16 {
-        self.program_counter
+    pub fn make_inactive(self) -> InactiveUxnVector {
+        InactiveUxnVector(self.program_counter)
     }
 }
 impl<'a, T, B> Iterator for UxnVector<'a, T, B>
@@ -666,6 +673,21 @@ where
             Some(instruction)
         } else {
             None
+        }
+    }
+}
+
+pub struct InactiveUxnVector(pub u16);
+impl InactiveUxnVector {
+    pub fn make_active<'a, T, B>(
+        self,
+        machine: &'a mut UxnMachine<T>,
+        device_bus: &'a mut B,
+    ) -> UxnVector<'a, T, B> {
+        UxnVector {
+            machine,
+            program_counter: self.0,
+            device_bus,
         }
     }
 }
