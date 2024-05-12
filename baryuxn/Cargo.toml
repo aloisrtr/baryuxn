@@ -11,5 +11,5 @@ readme = "readme.md"
 categories = ["embedded", "emulators", "no-std", "no-std::no-alloc"]
 keywords = ["uxn", "varvara", "no_std", "emulator"]
 
-[dependencies]
-baryasm = { path = "../baryasm", version = "0.1.0" }
+[dev-dependencies]
+baryasm = { path = "../baryasm" }
