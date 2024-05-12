@@ -1,5 +1,13 @@
-use std::{collections::VecDeque, fs::File, io::Read};
+use std::{
+    borrow::Borrow,
+    collections::VecDeque,
+    ffi::OsStr,
+    fs::File,
+    io::{stdout, BufReader, Read, Write},
+    path::Path,
+};
 
+use baryasm::UxnTalAssembler;
 use baryuxn::{
     machine::{InactiveUxnVector, UxnMachine},
     UxnArrayRom, UxnDeviceBus,
@@ -19,6 +27,10 @@ impl CliDeviceBus {
             debug,
             should_quit: false,
         }
+    }
+
+    pub fn get_console_vector(&self) -> u16 {
+        u16::from_be_bytes([self.storage[0x10], self.storage[0x11]])
     }
 }
 impl<T> UxnDeviceBus<T> for CliDeviceBus {
@@ -77,11 +89,19 @@ impl<T> UxnDeviceBus<T> for CliDeviceBus {
             },
             0x10 => match port {
                 // Console
-                0x08 => print!("{}", byte as char),
-                0x09 => eprint!("{}", byte as char),
+                0x08 => {
+                    print!("{}", byte as char);
+                    stdout().flush().unwrap()
+                }
+                0x09 => {
+                    eprint!("{}", byte as char);
+                    stdout().flush().unwrap()
+                }
                 _ => {}
             },
-            0xa0..=0xb0 => todo!(), // File
+            0xa0..=0xb0 => {
+                todo!("File operations not yet implemented")
+            } // File
             _ => {}
         }
     }
@@ -106,16 +126,35 @@ fn main() {
             rom_path = arg.clone()
         }
     } else {
-        println!("expected usage: baryuxn-cli [-v] ROM [args..]");
+        println!("expected usage: baryuxn-cli [-v] ROM|TAL [args..]");
         return;
     }
 
-    // Read ROM
-    let mut rom = [0; 0x10000];
-    File::open(rom_path)
-        .unwrap()
-        .read(&mut rom[0x100..])
-        .unwrap();
+    // Read/compile ROM
+    let rom = match Path::new(&rom_path)
+        .extension()
+        .map(|s| s.to_str().unwrap())
+    {
+        Some("tal") => UxnTalAssembler::<'_, 0x10000>::new()
+            .parse(
+                BufReader::new(File::open(rom_path).unwrap())
+                    .bytes()
+                    .map(|e| e.unwrap()),
+            )
+            .unwrap(),
+        Some("rom") => {
+            let mut rom = [0; 0x10000];
+            File::open(rom_path)
+                .unwrap()
+                .read(&mut rom[0x100..])
+                .unwrap();
+            rom
+        }
+        _ => {
+            println!("Requires either a .rom or .tal file as input");
+            return;
+        }
+    };
 
     // Create our machine
     let mut devices = CliDeviceBus::new(debug);
@@ -123,14 +162,25 @@ fn main() {
 
     // Evaluate the ROM
     let mut vector_queue = VecDeque::from([InactiveUxnVector(0x100)]);
+    // As a means of initialization, the first vector of the program is executed,
+    // then arguments passed are parsed
+    let mut input = [0];
     while !devices.should_quit {
+        // Read from stdin and execute vector if there is a character.
+        // if std::io::stdin().read_exact(&mut input).is_ok() {
+        //     let c = input[0];
+        //     devices.storage[0x12] = c;
+        //     devices.storage[0x17] = if c == 0 { 0x03 } else { 0x01 };
+        //     machine.execute_vector(devices.get_console_vector(), &mut devices);
+        // }
+
         let mut vector = if let Some(inactive_vector) = vector_queue.pop_back() {
             inactive_vector.make_active(&mut machine, &mut devices)
         } else {
-            break;
+            continue;
         };
 
-        if let Some(_instruction) = vector.next() {
+        if let Some(instruction) = vector.next() {
             vector_queue.push_front(vector.make_inactive())
         }
     }
