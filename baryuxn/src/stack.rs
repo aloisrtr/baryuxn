@@ -9,7 +9,7 @@
 //! two bytes interpreted in big endian fashion.
 
 use core::{
-    fmt::Debug,
+    fmt::{Debug, Display},
     iter::FusedIterator,
     ops::{Index, IndexMut},
 };
@@ -19,17 +19,46 @@ use core::{
 /// This interface is provided for implementors who'd want to meddle with said stacks!
 ///
 /// Most methods are provided with alternatives that work on shorts ([`u16`]) instead
-/// of bytes ([`u8`]).
+/// of bytes ([`u8`]). These are postfixed by `short`, e.g `get` -> `get_short`.
 ///
 /// Indexing is done using signed bytes ([`i8`]). Negative values access elements
 /// before the pointer, and vice-versa.
 ///
-/// | ... | -2 | -1 | 0 | 1 | 2 | ... |
-/// | --- | -- | -- | - | - | - | --- |
-/// | ... | 0xf0 | 0x0a | 0xab | 0x00 | 0x10 | ... |
+/// | **Index** | ... | -2 | -1 | **0** | 1 | 2 | 3 | ... |
+/// | ----- | --- | -- | -- | - | - | - | - | --- |
+/// | **Value** | ... | 0xf0 | 0x0a | 0xab | 0x00 | 0x10 | 0xaa | ... |
 ///
-/// One can also index on shorts.
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+/// One can also index on shorts. Shorts can be indexed in an unaligned fashion:
+/// <table>
+///   <tr>
+///     <td>Odd indices</td>
+///     <td colspan="2">...</td>
+///     <td colspan="2">-1</td>
+///     <td colspan="2">1</td>
+///     <td colspan="3">...</td>
+///   </tr>
+///   <tr>
+///     <td>Even indices</td>
+///     <td colspan="1">...</td>
+///     <td colspan="2">-2</td>
+///     <td colspan="2">0</td>
+///     <td colspan="2">2</td>
+///     <td colspan="1">...</td>
+///   </tr>
+///   <tr>
+///     <td>Value</td>
+///     <td>...</td>
+///     <td>0xf0</td>
+///     <td>0x0a</td>
+///     <td>0xab</td>
+///     <td>0x00</td>
+///     <td>0x10</td>
+///     <td>0xaa</td>
+///     <td>...</td>
+///   </tr>
+/// </table>
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Debug)]
 pub struct UxnStack {
     pub data: [u8; 0x100],
     pub pointer: u8,
@@ -438,7 +467,7 @@ impl PartialEq<[u8; 0x100]> for UxnStack {
         &self.data == other
     }
 }
-impl Debug for UxnStack {
+impl Display for UxnStack {
     /// Pretty printing for Uxn stacks.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         for i in -7..=1 {
