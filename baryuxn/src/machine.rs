@@ -8,19 +8,21 @@
 //! ```rust
 //! # use baryuxn::machine::*;
 //! # let mut machine = UxnMachine(UxnRom([0; 0x10000]), ());
-//! for executed_instruction in machine.vector(0x100) {
+//! for executed_instruction in machine.vector(0x100, &mut devices) {
 //!     println!("{executed_instruction}");
 //! }
 //! ```
 //!
-//! Stack machines are parametrized by the ROM storage type ([`T`]) and a type implementing
-//! [`UxnDeviceBus`] ([`B`]). This allows for a lot of freedom when it comes to implementation
-//! details.
+//! Stack machines are parametrized by the ROM storage type.
+//! This allows for a lot of freedom when it comes to implementation
+//! details, for example if you'd need multiple machines to share memory.
 
 use core::ops::{Index, IndexMut};
 
 use crate::{bus::UxnDeviceBus, stack::UxnStack};
+
 /// The Uxn machine, able to execute [Uxntal instructions](https://wiki.xxiivv.com/site/uxntal_opcodes.html).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct UxnMachine<T> {
     pub work_stack: UxnStack,
     pub return_stack: UxnStack,
@@ -28,6 +30,7 @@ pub struct UxnMachine<T> {
     pub memory: T,
 }
 impl<T> UxnMachine<T> {
+    /// Creates a new [`UxnMachine`] with the given memory contents and empty stacks.
     pub fn new(rom: T) -> Self {
         Self {
             work_stack: UxnStack::default(),
@@ -36,39 +39,29 @@ impl<T> UxnMachine<T> {
         }
     }
 }
-
 impl<T> UxnMachine<T>
 where
     T: Index<u16, Output = u8> + IndexMut<u16>,
 {
-    pub fn read_memory(&self, address: u16) -> u8 {
-        Self::get_memory(&self.memory, address)
+    /// Reads the content of memory at the given address.
+    pub fn get_memory(&self, address: u16) -> u8 {
+        self.memory[address]
     }
-    pub fn read_memory_short(&self, address: u16) -> u16 {
-        Self::get_memory_short(&self.memory, address)
+    /// Reads the content of memory at the given address as a short.
+    pub fn get_memory_short(&self, address: u16) -> u16 {
+        u16::from_be_bytes([self.memory[address], self.memory[address.wrapping_add(1)]])
     }
-
-    /// Reads a byte from the machine's memory.
-    fn get_memory(memory: &T, address: u16) -> u8 {
-        memory[address]
+    /// Returns a mutable reference to the contents of memory at the given address.
+    pub fn get_memory_mut(&mut self, address: u16) -> &mut u8 {
+        &mut self.memory[address]
     }
-
-    /// Gets a mutable reference to a byte in the machine's memory.
-    fn get_memory_mut(memory: &mut T, address: u16) -> &mut u8 {
-        &mut memory[address]
-    }
-
-    /// Reads a short from the machine's memory.
-    fn get_memory_short(memory: &T, address: u16) -> u16 {
-        u16::from_be_bytes([memory[address], memory[address.wrapping_add(1)]])
-    }
-
-    /// Gets a mutable reference to a short in the machine's memory.
-    fn set_memory_short_mut(memory: &mut T, address: u16, value: u16) {
+    /// Sets a short in memory at the given address.
+    pub fn set_memory_short(&mut self, address: u16, value: u16) {
         let [msb, lsb] = value.to_be_bytes();
-        memory[address] = msb;
-        memory[address.wrapping_add(1)] = lsb;
+        self.memory[address] = msb;
+        self.memory[address.wrapping_add(1)] = lsb;
     }
+
     /// Returns a [`UxnVector`] that can be iterated on to execute instructions
     /// until the first `BRK` is encountered.
     pub fn vector<'a, B: UxnDeviceBus<T>>(
@@ -112,7 +105,7 @@ where
     >(
         &mut self,
         operation: u8,
-        program_counter: u16,
+        mut program_counter: u16,
         device_bus: &mut B,
     ) -> Option<u16> {
         macro_rules! stack {
@@ -121,6 +114,15 @@ where
                     &mut self.return_stack
                 } else {
                     &mut self.work_stack
+                }
+            };
+        }
+        macro_rules! return_stack {
+            () => {
+                if RETURN {
+                    &mut self.work_stack
+                } else {
+                    &mut self.return_stack
                 }
             };
         }
@@ -143,6 +145,7 @@ where
             }
         }
 
+        program_counter = program_counter.wrapping_add(1);
         match operation {
             0x00 => {
                 // Immediate opcodes depend simply on which modes are set.
@@ -150,44 +153,37 @@ where
                     (false, false, false) => return None, // BRK
                     (true, false, false) => {
                         // JCI
-                        return Some(if self.work_stack.pop() != 0 {
-                            Self::get_memory_short(&self.memory, program_counter.wrapping_add(1))
-                                .wrapping_add(3)
-                        } else {
-                            3
-                        });
+                        if self.work_stack.pop() != 0 {
+                            program_counter =
+                                program_counter.wrapping_add(self.get_memory_short(program_counter))
+                        }
+                        program_counter = program_counter.wrapping_add(2)
                     }
                     (false, true, false) => {
-                        // JSI
-                        return Some(
-                            Self::get_memory_short(&self.memory, program_counter.wrapping_add(1))
-                                .wrapping_add(3),
-                        );
+                        // JMI
+                        program_counter = program_counter
+                            .wrapping_add(self.get_memory_short(program_counter))
+                            .wrapping_add(2);
                     }
                     (true, true, false) => {
                         // JSI
                         self.return_stack
-                            .push_short(program_counter.wrapping_add(3));
-                        return Some(
-                            Self::get_memory_short(&self.memory, program_counter.wrapping_add(1))
-                                .wrapping_add(3),
-                        );
+                            .push_short(program_counter.wrapping_add(2));
+                        program_counter = program_counter
+                            .wrapping_add(self.get_memory_short(program_counter))
+                            .wrapping_add(2)
                     }
                     (false, _, true) => {
                         // LIT
-                        stack!().push(Self::get_memory(
-                            &self.memory,
-                            program_counter.wrapping_add(1),
-                        ));
-                        return Some(3);
+                        let value = self.get_memory(program_counter);
+                        stack!().push(value);
+                        program_counter = program_counter.wrapping_add(1);
                     }
                     (true, _, true) => {
                         // LIT2
-                        stack!().push_short(Self::get_memory_short(
-                            &self.memory,
-                            program_counter.wrapping_add(1),
-                        ));
-                        return Some(3);
+                        let value = self.get_memory_short(program_counter);
+                        stack!().push_short(value);
+                        program_counter = program_counter.wrapping_add(2)
                     }
                 }
             }
@@ -325,21 +321,22 @@ where
             }
             0x0c => {
                 // JMP
-                return Some(if SHORT {
-                    pop_short::<KEEP>(stack!(), &mut popped).wrapping_sub(program_counter)
+                if SHORT {
+                    program_counter = pop_short::<KEEP>(stack!(), &mut popped)
                 } else {
-                    program_counter.wrapping_add((pop::<KEEP>(stack!(), &mut popped) as i8) as u16)
-                });
+                    program_counter = program_counter
+                        .wrapping_add((pop::<KEEP>(stack!(), &mut popped) as i8) as u16)
+                }
             }
             0x0d => {
                 // JCN
                 if pop::<KEEP>(stack!(), &mut popped) != 0 {
-                    return Some(if SHORT {
-                        pop_short::<KEEP>(stack!(), &mut popped).wrapping_sub(program_counter)
+                    if SHORT {
+                        program_counter = pop_short::<KEEP>(stack!(), &mut popped)
                     } else {
-                        program_counter
+                        program_counter = program_counter
                             .wrapping_add((pop::<KEEP>(stack!(), &mut popped) as i8) as u16)
-                    });
+                    }
                 }
             }
             0x0e => {
@@ -349,51 +346,33 @@ where
                 // BTW, this should be fine to check because:
                 // - if we're borrowing `work_stack!()`, then `stack!()` does not alias `self.return_stack!()`
                 // - if we're borrowing `return_stack!()`, then `stack!()` is still ok to use as the first branch shows us
-                if RETURN {
-                    stack!().push_short(program_counter);
-                    return Some(if SHORT {
-                        pop_short::<KEEP>(stack!(), &mut popped).wrapping_sub(program_counter)
-                    } else {
-                        program_counter
-                            .wrapping_add((pop::<KEEP>(stack!(), &mut popped) as i8) as u16)
-                    });
+                self.return_stack.push_short(program_counter);
+                if SHORT {
+                    program_counter = pop_short::<KEEP>(stack!(), &mut popped)
                 } else {
-                    self.return_stack.push_short(program_counter);
-                    return Some(if SHORT {
-                        pop_short::<KEEP>(&mut self.work_stack, &mut popped)
-                            .wrapping_sub(program_counter)
-                    } else {
-                        program_counter.wrapping_add(
-                            (pop::<KEEP>(&mut self.work_stack, &mut popped) as i8) as u16,
-                        )
-                    });
-                };
+                    program_counter = program_counter
+                        .wrapping_add((pop::<KEEP>(stack!(), &mut popped) as i8) as u16)
+                }
             }
             0x0f => {
                 // STH
                 if SHORT {
                     let v = pop_short::<KEEP>(stack!(), &mut popped);
-                    if RETURN {
-                        self.work_stack.push_short(v)
-                    } else {
-                        self.return_stack.push_short(v)
-                    }
+                    return_stack!().push_short(v);
                 } else {
                     let v = pop::<KEEP>(stack!(), &mut popped);
-                    if RETURN {
-                        self.work_stack.push(v)
-                    } else {
-                        self.return_stack.push(v)
-                    }
+                    return_stack!().push(v);
                 }
             }
             0x10 => {
                 // LDZ
                 let address = pop::<KEEP>(stack!(), &mut popped);
                 if SHORT {
-                    stack!().push_short(Self::get_memory_short(&self.memory, address as u16))
+                    let value = self.get_memory_short(address as u16);
+                    stack!().push_short(value)
                 } else {
-                    stack!().push(Self::get_memory(&self.memory, address as u16))
+                    let value = self.get_memory(address as u16);
+                    stack!().push(value)
                 }
             }
             0x11 => {
@@ -401,10 +380,10 @@ where
                 let address = pop::<KEEP>(stack!(), &mut popped);
                 if SHORT {
                     let v = pop_short::<KEEP>(stack!(), &mut popped);
-                    Self::set_memory_short_mut(&mut self.memory, address as u16, v)
+                    self.set_memory_short(address as u16, v)
                 } else {
                     let v = pop::<KEEP>(stack!(), &mut popped);
-                    *Self::get_memory_mut(&mut self.memory, address as u16) = v
+                    *self.get_memory_mut(address as u16) = v
                 }
             }
             0x12 => {
@@ -412,9 +391,11 @@ where
                 let address = program_counter
                     .wrapping_add_signed((pop::<KEEP>(stack!(), &mut popped) as i8) as i16);
                 if SHORT {
-                    stack!().push_short(Self::get_memory_short(&self.memory, address as u16))
+                    let value = self.get_memory_short(address as u16);
+                    stack!().push_short(value)
                 } else {
-                    stack!().push(Self::get_memory(&self.memory, address as u16))
+                    let value = self.get_memory(address as u16);
+                    stack!().push(value)
                 }
             }
             0x13 => {
@@ -423,19 +404,21 @@ where
                     program_counter.wrapping_add((pop::<KEEP>(stack!(), &mut popped) as i8) as u16);
                 if SHORT {
                     let v = pop_short::<KEEP>(stack!(), &mut popped);
-                    Self::set_memory_short_mut(&mut self.memory, address as u16, v)
+                    self.set_memory_short(address as u16, v)
                 } else {
                     let v = pop::<KEEP>(stack!(), &mut popped);
-                    *Self::get_memory_mut(&mut self.memory, address as u16) = v
+                    *self.get_memory_mut(address as u16) = v
                 }
             }
             0x14 => {
                 // LDA
                 let address = pop_short::<KEEP>(stack!(), &mut popped);
                 if SHORT {
-                    stack!().push_short(Self::get_memory_short(&self.memory, address as u16))
+                    let value = self.get_memory_short(address as u16);
+                    stack!().push_short(value)
                 } else {
-                    stack!().push(Self::get_memory(&self.memory, address as u16))
+                    let value = self.get_memory(address as u16);
+                    stack!().push(value)
                 }
             }
             0x15 => {
@@ -443,10 +426,10 @@ where
                 let address = pop_short::<KEEP>(stack!(), &mut popped);
                 if SHORT {
                     let v = pop_short::<KEEP>(stack!(), &mut popped);
-                    Self::set_memory_short_mut(&mut self.memory, address as u16, v)
+                    self.set_memory_short(address as u16, v);
                 } else {
                     let v = pop::<KEEP>(stack!(), &mut popped);
-                    *Self::get_memory_mut(&mut self.memory, address as u16) = v
+                    *self.get_memory_mut(address as u16) = v
                 }
             }
             0x16 => {
@@ -579,7 +562,7 @@ where
             _ => {}
         }
 
-        Some(1)
+        Some(program_counter)
     }
 }
 
@@ -606,6 +589,8 @@ pub struct UxnVector<'a, T, B> {
     pub device_bus: &'a mut B,
 }
 impl<'a, T, B> UxnVector<'a, T, B> {
+    /// Makes this [`UxnVector`] into an [`InactiveUxnVector`], leaving another one
+    /// to use the machine and devices.
     pub fn make_inactive(self) -> InactiveUxnVector {
         InactiveUxnVector(self.program_counter)
     }
@@ -624,7 +609,7 @@ where
         let operation = instruction & 0x1f;
 
         // Select the right function to call depending on mode flags
-        let program_counter_offset = match instruction & 0xe0 {
+        let program_counter = match instruction & 0xe0 {
             0x00 => self.machine.execute_operation::<false, false, false, B>(
                 operation,
                 self.program_counter,
@@ -668,8 +653,8 @@ where
             _ => unreachable!("You managed to enter a set of modes that does not exist... huh?"),
         };
 
-        if let Some(offset) = program_counter_offset {
-            self.program_counter = self.program_counter.wrapping_add(offset);
+        if let Some(pc) = program_counter {
+            self.program_counter = pc;
             Some(instruction)
         } else {
             None
@@ -677,8 +662,12 @@ where
     }
 }
 
+/// Inactive vectors simply store the value of the program counter until they get
+/// promoted to the active vector for a [`UxnMachine`].
 pub struct InactiveUxnVector(pub u16);
 impl InactiveUxnVector {
+    /// Promotes this vector to an active [`UxnVector`], allowing it to execute instructions
+    /// on a [`UxnMachine`] using the given set of Uxn devices.
     pub fn make_active<'a, T, B>(
         self,
         machine: &'a mut UxnMachine<T>,

@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Aloïs Rautureau <alois.rautureau@ens-rennes.fr>"]
 license = "Unlicense"
-description = "An implementation of the Uxn stack machine designed to not rely on the standard library."
+description = "An implementation of the Uxn stack machine as a no_std library."
+repository = "https://github.com/aloisrtr/baruxn"
+readme = "readme.md"
+
+categories = ["embedded", "emulators", "no-std", "no-std::no-alloc"]
+keywords = ["uxn", "varvara", "no_std", "emulator"]
 
 [dependencies]
 baryasm = { path = "../baryasm" }
