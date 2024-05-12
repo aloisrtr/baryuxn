@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-baryuxn = { path = "../baryuxn" }
+baryuxn = { path = "../../baryuxn" }
 chrono = "0.4.38"

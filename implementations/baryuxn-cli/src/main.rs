@@ -1,9 +1,8 @@
 use std::{collections::VecDeque, fs::File, io::Read};
 
 use baryuxn::{
-    bus::UxnDeviceBus,
     machine::{InactiveUxnVector, UxnMachine},
-    UxnArrayRom,
+    UxnArrayRom, UxnDeviceBus,
 };
 use chrono::{Datelike, Local, Timelike};
 

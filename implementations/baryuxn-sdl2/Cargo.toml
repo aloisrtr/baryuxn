@@ -1,0 +1,13 @@
+[package]
+name = "baryuxn-sdl2"
+version = "0.1.0"
+edition = "2021"
+description = "A Varvara ordinator using SDL2 as a backend"
+
+[dependencies]
+baryuxn = { path = "../baryuxn" }
+sdl2 = "0.36"
+clap = { version = "4.5.4", features = ["derive"] }
+chrono = "0.4.38"
+log = "0.4.21"
+env_logger = "0.11.3"
