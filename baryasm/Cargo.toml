@@ -9,3 +9,7 @@ description = "Efficient Uxn assembler based on parser combinators."
 [dependencies]
 heapless = "0.8.0"
 either = { version = "1.11", default-features = false }
+log = "0.4"
+
+[dev-dependencies]
+env_logger = "0.11"

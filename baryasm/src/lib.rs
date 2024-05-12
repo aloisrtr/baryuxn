@@ -1,5 +1,5 @@
 //! # BaryAsm
-//! An efficient [UxnTal](https://wiki.xxiivv.com/site/uxntal.html) assembler based on parser combinators.
+//! An efficient byte-stream oriented [UxnTal](https://wiki.xxiivv.com/site/uxntal.html) assembler.
 //!
 //! Meant as a companion to [BaryUxn](), does not require [`std`] or anything fancy:
 //! just grab a stream of bytes and try to compile it into a UxnTal ROM!
@@ -24,7 +24,7 @@
 //! The original [uxnasm]() has the same approach, but fixes an arena type allocator
 //! hard coded into the code. In the future, this library will allow you to come with your own
 //! allocator using the [`Allocator`](std::alloc::Allocator) trait. If you've got
-//! "infinite" memory, good for you! Otherwise, pass in an arena allocator and you're
+//! "infinite" memory, good for you! Otherwise, pass in an arena-like allocator and you're
 //! good to go on embedded devices!
 
 #![no_std]
@@ -33,7 +33,7 @@ mod arena;
 
 use arena::ArenaAllocator;
 use either::*;
-use heapless::Vec;
+use heapless::{LinearMap, Vec};
 
 #[cfg(test)]
 mod test;
@@ -50,6 +50,19 @@ pub enum UxnTalAssemblerError {
     InvalidIdentifier,
     DuplicateMacro,
     DuplicateLabel,
+    TokenTooLong,
+    EmptyLabel,
+    ReferenceLimitExceeded,
+    LabelLimitExceeded,
+    ReferenceToUnknownLabel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ord, Eq, Hash)]
+enum UxnTalReferenceTag {
+    Relative,
+    ZeroPage,
+    Absolute,
+    NonQualified,
 }
 
 /// Keeps track of all information regarding the current assembly process.
@@ -63,17 +76,13 @@ pub struct UxnTalAssembler<'this, const BYTES: usize> {
     rom_pointer: u16,
 
     // Preprocessing information
-    // TODO: Change these to a sort of tree-like implementation branching on byte values
-    references: Vec<(&'this [u8], u16), 0x1000>,
-    // IMPLEMENTATION: Macros are written with a prefix byte, either 0 if the macro
-    // contains no scoped labels/macro/reference call (meaning it can be fully
-    // compiled and the slice should be copied to the rom when calling it) or
-    // 1 if it is kept in string form.
-    macros: Vec<(&'this [u8], &'this [u8]), 0x1000>,
-    labels: Vec<(&'this [u8], u16), 0x1000>,
+    scope: Vec<u8, 0x40>,
+    references: Vec<(&'this [u8], UxnTalReferenceTag, u16), 0x1000>,
+    labels: LinearMap<&'this [u8], u16, 0x1000>,
+    _macros: LinearMap<&'this [u8], &'this [u8], 0x1000>,
 
     // Inner arena of the context, where strings are copied when needed
-    arena: ArenaAllocator<BYTES>,
+    arena: ArenaAllocator<'this, BYTES>,
 
     // Lookahead buffer
     lookahead: Vec<u8, 0x8>,
@@ -83,12 +92,13 @@ impl<'src, const BYTES: usize> Default for UxnTalAssembler<'src, BYTES> {
         Self {
             line: 0,
 
+            scope: Vec::default(),
             rom: [0; 0x10000],
             rom_pointer: 0x100,
 
             references: Vec::default(),
-            macros: Vec::default(),
-            labels: Vec::default(),
+            _macros: LinearMap::default(),
+            labels: LinearMap::default(),
             arena: ArenaAllocator::default(),
             lookahead: Vec::default(),
         }
@@ -103,6 +113,7 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
     fn write_byte(&mut self, byte: u8) {
         self.rom[self.rom_pointer as usize] = byte;
         self.rom_pointer = self.rom_pointer.wrapping_add(1);
+        log::trace!("wrote byte: {byte:#04x} ({})", byte as char);
     }
 
     /// Writes a short to the ROM.
@@ -111,6 +122,7 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
         self.rom[self.rom_pointer as usize] = msb;
         self.rom[self.rom_pointer.wrapping_add(1) as usize] = lsb;
         self.rom_pointer = self.rom_pointer.wrapping_add(2);
+        log::trace!("wrote short: {short:#06x}",);
     }
 
     /// Parses a [UxnTal instruction](https://wiki.xxiivv.com/site/uxntal_opcodes.html)
@@ -119,7 +131,7 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
         &mut self,
         source: &mut I,
     ) -> UxnTalParserResult<u8> {
-        self.lookahead.extend(source.take(3 - self.lookahead.len())); // TODO: better error
+        self.lookahead.extend(source.take(3 - self.lookahead.len()));
         if self.lookahead.len() < 3 {
             return Err(UxnTalAssemblerError::UnknownOperation);
         }
@@ -166,7 +178,9 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
         };
 
         while let Some(mode) = source.next() {
-            self.lookahead.push(mode).unwrap(); // TODO: better error
+            self.lookahead
+                .push(mode)
+                .map_err(|_| UxnTalAssemblerError::TokenTooLong)?;
             match mode as char {
                 '2' => {
                     if (instruction & 0x20) == 0 {
@@ -247,7 +261,11 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
                 value <<= 4;
                 value += i as u16;
             } else if (c as char).is_whitespace() {
-                break;
+                return UxnTalParserResult::Ok(if hex_count <= 2 {
+                    Either::Left(value as u8)
+                } else {
+                    Either::Right(value)
+                });
             } else {
                 return UxnTalParserResult::Err(UxnTalAssemblerError::InvalidHexadecimalDigit(
                     c as char,
@@ -260,12 +278,18 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
         }
 
         for c in source {
-            self.lookahead.push(c).unwrap(); // TODO: better error
+            self.lookahead
+                .push(c)
+                .map_err(|_| UxnTalAssemblerError::TokenTooLong)?;
             if let Some(i) = (c as char).to_digit(16) {
                 value <<= 4;
                 value += i as u16;
             } else if (c as char).is_whitespace() {
-                break;
+                return UxnTalParserResult::Ok(if hex_count <= 2 {
+                    Either::Left(value as u8)
+                } else {
+                    Either::Right(value)
+                });
             } else {
                 return UxnTalParserResult::Err(UxnTalAssemblerError::InvalidHexadecimalDigit(
                     c as char,
@@ -276,7 +300,6 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
                 break;
             }
         }
-
         UxnTalParserResult::Ok(if hex_count <= 2 {
             Either::Left(value as u8)
         } else {
@@ -284,51 +307,104 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
         })
     }
 
-    // fn make_reference<I: Iterator<Item = u8>>(&mut self, source: &mut I) -> UxnTalParserResult<()> {
-    //     // TODO: handle scopes and lambdas
-    //     let name = self.arena.start_growable_alloc();
-    //     let mut name_length = 0;
-    //     let address = self.rom_pointer;
+    fn make_reference<I: Iterator<Item = u8>>(
+        &mut self,
+        source: &mut I,
+        address: u16,
+        rune: char,
+    ) -> UxnTalParserResult<()> {
+        self.arena.start_registering();
 
-    //     // Parse the name
-    //     for b in source {
-    //         if (b as char).is_whitespace() {
-    //             break;
-    //         }
-    //         name[name_length] = b;
-    //         name_length += 1;
-    //     }
+        if self.lookahead.is_empty() {
+            match source.next().unwrap() as char {
+                '{' => todo!("lambdas are not yet supported"),
+                '&' | '/' => {
+                    for &b in &self.scope {
+                        self.arena.register(b);
+                    }
+                }
+                c => {
+                    self.arena.register(c as u8);
+                }
+            };
+        } else {
+            let mut lookahead = self.lookahead.iter().cloned();
+            match lookahead.next().ok_or(UxnTalAssemblerError::EmptyLabel)? as char {
+                '{' => todo!("lambdas are not yet supported"),
+                '&' | '/' => {
+                    for &b in &self.scope {
+                        self.arena.register(b);
+                    }
+                }
+                c => {
+                    self.arena.register(c as u8);
+                }
+            }
+            for b in lookahead {
+                if (b as char).is_whitespace() {
+                    break;
+                }
+                self.arena.register(b);
+            }
+        }
+        while let Some(b) = source.next() {
+            if (b as char).is_whitespace() {
+                break;
+            }
+            self.arena.register(b);
+        }
+        let label = self.arena.end_registering().unwrap();
+        log::trace!(
+            "registered reference to label {}",
+            core::str::from_utf8(label).unwrap()
+        );
+        let tag = match rune {
+            '_' | ',' => UxnTalReferenceTag::Relative,
+            '-' | '.' => UxnTalReferenceTag::ZeroPage,
+            '=' | ';' => UxnTalReferenceTag::Absolute,
+            _ => UxnTalReferenceTag::NonQualified,
+        };
+        self.references
+            .push((label, tag, address))
+            .map_err(|_| UxnTalAssemblerError::ReferenceLimitExceeded)?;
+        Ok(())
+    }
 
-    //     let (name, _) = name.split_at(name_length + 1);
-    //     self.arena.end_growable_alloc(name);
-
-    //     Ok(())
-    // }
-
-    /// Parses an identifier, used for macros, labels and such.
-    // fn parse_identifier<'src>(
-    //     source: &'src str,
-    //     _context: &mut UxnTalAssembler,
-    // ) -> UxnTalParserResult<'src, &'src str> {
-    //     let mut name_length = 0;
-    //     for c in source.chars() {
-    //         if c.is_ascii_whitespace() {
-    //             break;
-    //         }
-    //         if !c.is_alphabetic() {
-    //             return Err(UxnTalParserError::InvalidIdentifier(
-    //                 &source[..=name_length],
-    //             ));
-    //         }
-    //         name_length += 1;
-    //     }
-    //     let (name, rest) = source.split_at(name_length);
-    //     Ok((rest, name))
-    // }
-
-    /// Parses the body of a macro.
-    fn register_macro<I: Iterator<Item = u8>>(&mut self, source: &mut I) -> UxnTalParserResult<()> {
-        todo!()
+    fn make_label<I: Iterator<Item = u8>>(
+        &mut self,
+        source: &mut I,
+        scoped: bool,
+    ) -> UxnTalParserResult<&'this [u8]> {
+        self.arena.start_registering();
+        if scoped {
+            for &b in &self.scope {
+                self.arena.register(b)
+            }
+        }
+        while let Some(b) = source.next() {
+            if (b as char).is_whitespace() {
+                break;
+            }
+            self.arena.register(b);
+        }
+        let name = self.arena.end_registering().unwrap();
+        if name.is_empty() {
+            return UxnTalParserResult::Err(UxnTalAssemblerError::EmptyLabel);
+        }
+        if self
+            .labels
+            .insert(name, self.rom_pointer)
+            .map_err(|_| UxnTalAssemblerError::LabelLimitExceeded)?
+            .is_some()
+        {
+            return UxnTalParserResult::Err(UxnTalAssemblerError::DuplicateLabel);
+        }
+        log::trace!(
+            "registered label {} at address {:#06x}",
+            core::str::from_utf8(name).unwrap(),
+            self.rom_pointer
+        );
+        Ok(name)
     }
 
     /// Consumes the assembler struct to return either a fully assembled ROM or
@@ -337,6 +413,7 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
         mut self,
         mut source: I,
     ) -> UxnTalParserResult<[u8; 0x10000]> {
+        // Preprocessing phase
         while let Some(b) = source.next() {
             self.lookahead.clear();
             let c = b as char;
@@ -363,31 +440,46 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
                 }
                 '@' => {
                     // Parent label rune
-                    todo!()
+                    let label = self.make_label(&mut source, false)?;
+                    self.scope.clear();
+                    self.scope.extend_from_slice(label).unwrap();
+                    self.scope.push(b'/').unwrap();
+                    log::trace!(
+                        "scope is now {}",
+                        core::str::from_utf8(self.scope.as_slice()).unwrap()
+                    );
                 }
                 '&' => {
                     // Child label rune
-                    todo!()
+                    self.make_label(&mut source, true)?;
                 }
                 ',' => {
                     // Literal relative address rune
-                    todo!()
+                    self.make_reference(&mut source, self.rom_pointer.wrapping_add(1), c)?;
+                    self.write_byte(0x80);
+                    self.rom_pointer = self.rom_pointer.wrapping_add(1);
                 }
                 '_' => {
                     // Raw relative address rune
-                    todo!()
+                    self.make_reference(&mut source, self.rom_pointer, c)?;
+                    self.rom_pointer = self.rom_pointer.wrapping_add(1);
                 }
                 '.' => {
                     // Literal zero-page address rune
-                    todo!()
+                    self.make_reference(&mut source, self.rom_pointer.wrapping_add(1), c)?;
+                    self.write_byte(0x80);
+                    self.rom_pointer = self.rom_pointer.wrapping_add(1);
                 }
                 '-' => {
                     // Raw zero-page address rune
-                    todo!()
+                    self.make_reference(&mut source, self.rom_pointer, c)?;
+                    self.rom_pointer = self.rom_pointer.wrapping_add(1);
                 }
                 ';' => {
                     // Literal absolute address rune
-                    todo!()
+                    self.make_reference(&mut source, self.rom_pointer.wrapping_add(1), c)?;
+                    self.write_byte(0xa0);
+                    self.rom_pointer = self.rom_pointer.wrapping_add(2);
                 }
                 ':' => {
                     // DEPRECATED: use '=' instead.
@@ -395,15 +487,20 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
                 }
                 '=' => {
                     // Raw literal address rune
-                    todo!()
+                    self.make_reference(&mut source, self.rom_pointer, c)?;
+                    self.rom_pointer = self.rom_pointer.wrapping_add(2);
                 }
                 '!' => {
                     // JMI rune
-                    todo!()
+                    self.make_reference(&mut source, self.rom_pointer.wrapping_add(1), c)?;
+                    self.write_byte(0x40);
+                    self.rom_pointer = self.rom_pointer.wrapping_add(2);
                 }
                 '?' => {
                     // JCI rune
-                    todo!()
+                    self.make_reference(&mut source, self.rom_pointer.wrapping_add(1), c)?;
+                    self.write_byte(0x20);
+                    self.rom_pointer = self.rom_pointer.wrapping_add(2);
                 }
                 '#' => {
                     // LIT rune
@@ -430,10 +527,7 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
                 }
                 '%' => {
                     // Macro
-                    // let (rest, (name, body)) = parse_macro_definition(&source[1..], context)?;
-                    // context
-                    //     .register_macro(name, body)
-                    //     .map_err(|_| UxnTalParserError::DuplicateMacro(name))?;
+                    todo!()
                 }
                 '}' => {
                     // Lambda
@@ -456,10 +550,51 @@ impl<'this, const BYTES: usize> UxnTalAssembler<'this, BYTES> {
                             Either::Right(short) => self.write_short(short),
                         }
                     } else {
-                        todo!()
+                        // Could be a macro, otherwise create a reference
+                        // TODO: check if macro call
+                        self.make_reference(&mut source, self.rom_pointer.wrapping_add(1), ' ')?;
+                        self.write_byte(0x60);
+                        self.rom_pointer = self.rom_pointer.wrapping_add(2);
                     }
                 }
             };
+        }
+
+        // Assembly
+        for (label, tag, reference) in self.references.into_iter() {
+            let target = *self
+                .labels
+                .get(label)
+                .ok_or(UxnTalAssemblerError::ReferenceToUnknownLabel)?;
+            log::trace!(
+                "resolving reference to label {} at address {reference:#06x}, with tag {tag:?}",
+                core::str::from_utf8(label).unwrap()
+            );
+            match tag {
+                UxnTalReferenceTag::Relative => {
+                    let difference = target.wrapping_sub(reference).wrapping_sub(2);
+                    // TODO check if reference too far
+                    self.rom[reference as usize] = difference as u8;
+                    log::trace!("wrote relative offset {difference:#04x}");
+                }
+                UxnTalReferenceTag::ZeroPage => {
+                    self.rom[reference as usize] = target as u8;
+                    log::trace!("wrote zero-page address {target:#04x}");
+                }
+                UxnTalReferenceTag::Absolute => {
+                    let [msb, lsb] = target.to_be_bytes();
+                    self.rom[reference as usize] = msb;
+                    self.rom[reference.wrapping_add(1) as usize] = lsb;
+                    log::trace!("wrote absolute address {target:#06x}");
+                }
+                UxnTalReferenceTag::NonQualified => {
+                    let difference = target.wrapping_sub(reference).wrapping_sub(2);
+                    let [msb, lsb] = difference.to_be_bytes();
+                    self.rom[reference as usize] = msb;
+                    self.rom[reference.wrapping_add(1) as usize] = lsb;
+                    log::trace!("wrote relative offset {difference:#06x}");
+                }
+            }
         }
         Ok(self.rom)
     }

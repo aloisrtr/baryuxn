@@ -8,36 +8,48 @@
 //! The API looks similar to that of the [`allocator_api`]() nightly feature, and
 //! will comply to it fully once said feature gets stabilized.
 
-use core::{alloc::Layout, ptr::NonNull};
+use core::{marker::PhantomData, ptr::NonNull};
 
 #[derive(Clone, Debug)]
-pub(crate) struct ArenaAllocator<const BYTES: usize> {
+pub(crate) struct ArenaAllocator<'this, const BYTES: usize> {
     storage: [u8; BYTES],
     free: NonNull<u8>,
+    registration_start: Option<NonNull<u8>>,
+    _marker: PhantomData<&'this ()>,
 }
-impl<const BYTES: usize> Default for ArenaAllocator<BYTES> {
+impl<'this, const BYTES: usize> Default for ArenaAllocator<'this, BYTES> {
     fn default() -> Self {
         let mut arena = Self {
             storage: [0; BYTES],
             free: NonNull::dangling(),
+            registration_start: None,
+            _marker: PhantomData,
         };
         arena.free = NonNull::new(arena.storage.as_mut_ptr()).unwrap();
         arena
     }
 }
-impl<const BYTES: usize> ArenaAllocator<BYTES> {
-    pub fn new() -> Self {
-        Self::default()
+impl<'this, const BYTES: usize> ArenaAllocator<'this, BYTES> {
+    pub fn start_registering(&mut self) {
+        self.registration_start = Some(self.free);
     }
 
-    pub fn allocate(&self, layout: Layout) -> Result<&mut [u8], ()> {
-        let size = layout.size();
-        let left = unsafe { self.free.as_ptr().offset_from(self.storage.as_ptr()) };
-        if size < left.abs() as usize {
-            // No space left
-            return Err(());
+    pub fn register(&mut self, byte: u8) {
+        unsafe {
+            *self.free.as_mut() = byte;
+            self.free = NonNull::new(self.free.as_ptr().add(1)).unwrap()
         }
+    }
 
-        Ok(unsafe { core::slice::from_raw_parts_mut(self.free.as_ptr(), size) })
+    pub fn end_registering(&mut self) -> Option<&'this [u8]> {
+        if let Some(start) = self.registration_start {
+            unsafe {
+                let size = self.free.as_ptr().offset_from(start.as_ptr());
+                assert!(size >= 0, "size was {size}");
+                Some(core::slice::from_raw_parts(start.as_ptr(), size as usize))
+            }
+        } else {
+            return None;
+        }
     }
 }

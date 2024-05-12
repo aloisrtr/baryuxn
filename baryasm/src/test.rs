@@ -1,9 +1,22 @@
+extern crate std;
+
+use std::sync::Once;
+
 use heapless::String;
 
 use crate::*;
 
+static INIT: Once = Once::new();
+
+fn init() {
+    INIT.call_once(|| {
+        env_logger::init();
+    })
+}
+
 #[test]
 fn test_parse_comment() {
+    init();
     let mut assembler = UxnTalAssembler::<'_, 0x0>::new();
     assert!(assembler
         .walk_comment(&mut b" this is a comment )".iter().cloned())
@@ -16,6 +29,7 @@ fn test_parse_comment() {
 
 #[test]
 fn test_parse_nested_comment() {
+    init();
     let mut assembler = UxnTalAssembler::<'_, 0x0>::new();
     assert!(assembler
         .walk_comment(&mut b" this is a (nested) () comment )".iter().cloned())
@@ -24,6 +38,7 @@ fn test_parse_nested_comment() {
 
 #[test]
 fn test_parse_hexadecimal() {
+    init();
     let mut assembler = UxnTalAssembler::<'_, 0x0>::new();
     assembler.lookahead.clear();
     assert_eq!(
@@ -54,6 +69,7 @@ fn test_parse_hexadecimal() {
 
 #[test]
 fn test_parse_instruction() {
+    init();
     let mut assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
         assembler.write_instruction(&mut b"BRK".iter().cloned()),
@@ -93,19 +109,27 @@ fn test_parse_instruction() {
 
 #[test]
 fn test_parse_lit_rune() {
+    init();
     let assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
-        assembler.clone().parse_string("#Ff").unwrap()[0x100..0x102],
+        assembler.parse_string("#Ff").unwrap()[0x100..0x102],
         [0x80, 0xff]
     );
+}
+
+#[test]
+fn test_parse_lit2_rune() {
+    init();
+    let assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
-        assembler.clone().parse_string("#faF9").unwrap()[0x100..0x103],
+        assembler.parse_string("#faF9").unwrap()[0x100..0x103],
         [0xa0, 0xfa, 0xf9]
     );
 }
 
 #[test]
 fn test_parse_ascii() {
+    init();
     let assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
         &String::from_utf8(
@@ -121,6 +145,7 @@ fn test_parse_ascii() {
 
 #[test]
 fn test_absolute_padding() {
+    init();
     let assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
         assembler.parse_string("|10 #ff").unwrap()[0x10..0x12],
@@ -130,6 +155,7 @@ fn test_absolute_padding() {
 
 #[test]
 fn test_relative_padding() {
+    init();
     let assembler = UxnTalAssembler::<'_, 0>::new();
     assert_eq!(
         assembler.parse_string("$5 #ff").unwrap()[0x105..0x107],
@@ -137,35 +163,13 @@ fn test_relative_padding() {
     )
 }
 
-// #[test]
-// fn test_parse_identifier() {
-//     assert_eq!(
-//         parse_identifier("modulo", &mut UxnTalAssembler::new()),
-//         Ok(("", "modulo"))
-//     );
-//     assert_eq!(
-//         parse_identifier("modulo otherstuff", &mut UxnTalAssembler::new()),
-//         Ok((" otherstuff", "modulo"))
-//     )
-// }
-
-// #[test]
-// fn test_parse_macro_definition() {
-//     assert_eq!(
-//         parse_macro_definition(
-//             "modulo ( num denum -- res ) {DIVk MUL SUB}",
-//             &mut UxnTalAssembler::new()
-//         ),
-//         Ok(("", ("modulo", "DIVk MUL SUB")))
-//     )
-// }
-
 /*
  * GENERAL INTEGRATION TESTING
  */
 
 #[test]
 fn test_result_six() {
+    init();
     let rom = UxnTalAssembler::<'_, 0>::new()
         .parse_string("#01 DUP ADD #03 MUL ( result: 06 )")
         .unwrap();
@@ -175,29 +179,39 @@ fn test_result_six() {
     );
 }
 
-// #[test]
-// fn test_hello_world_example() {
-//     let rom = parse(
-//         r#"
-//         |10 @Console &vector $2 &read $1 &pad $5 &write $1 &error $1
+#[test]
+fn test_hello_world_example() {
+    init();
+    let rom = UxnTalAssembler::<'_, 0x10000>::new()
+        .parse_string(
+            r#"
+        |10 @Console &vector $2 &read $1 &pad $5 &write $1 &error $1
 
-//         |100
+        |100
 
-//         @on-reset ( -> )
-//         	;my-string print-text
-//         	BRK
+        @on-reset ( -> )
+        	;my-string print-text
+        	BRK
 
-//         @print-text ( str* -- )
-//         	&while
-//         		LDAk .Console/write DEO
-//         		INC2 LDAk ?&while
-//         	POP2
-//         	JMP2r
+        @print-text ( str* -- )
+        	&while
+        		LDAk .Console/write DEO
+        		INC2 LDAk ?&while
+        	POP2
+        	JMP2r
 
-//         @my-string
-//         	"Hello 20 "World! 00"
-//     "#,
-//     )
-//     .unwrap();
-//     assert_eq!(rom, [0u8; 0x10000]);
-// }
+        @my-string
+        	"Hello 20 "World! 00
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        rom[0x100..0x11f],
+        [
+            0xa0, 0x01, 0x12, 0x60, 0x00, 0x01, 0x00, 0x94, 0x80, 0x18, 0x17, 0x21, 0x94, 0x20,
+            0xff, 0xf7, 0x22, 0x6c, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c,
+            0x64, 0x21, 0x00
+        ]
+    )
+}
