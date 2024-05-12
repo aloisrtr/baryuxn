@@ -1,6 +1,6 @@
 [package]
 name = "baryuxn"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Aloïs Rautureau <alois.rautureau@ens-rennes.fr>"]
 license = "Unlicense"

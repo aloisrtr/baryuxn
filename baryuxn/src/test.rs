@@ -156,53 +156,59 @@ fn test_lth() {
 
 #[test]
 fn test_jmp() {
-    todo!()
+    assert_work_stack_state(",&skip-rel JMP BRK &skip-rel #01", &[0x01]);
 }
 
 #[test]
 fn test_jcn() {
-    todo!()
+    assert_work_stack_state("#abcd #01 ,&pass JCN SWP &pass POP", &[0xab]);
+    assert_work_stack_state("#abcd #00 ,&fail JCN SWP &fail POP", &[0xcd]);
 }
 
 #[test]
 fn test_jsr() {
-    todo!()
+    assert_return_stack_state(",&routine JSR &routine BRK", &[0x01, 0x03]);
+    assert_work_stack_state(",&get JSR #01 BRK &get #02 JMP2r", &[0x02, 0x01]);
 }
 
 #[test]
 fn test_sth() {
     assert_return_stack_state("#12 STH", &[0x12]);
-    //assert_work_stack_state("LITr 34 STHr", &[0x34]);
+    assert_work_stack_state("LITr 34 STHr", &[0x34]);
 }
 
 #[test]
 fn test_ldz() {
-    todo!()
+    assert_work_stack_state("|00 @cell $2 |0100 .cell LDZ", &[0x00])
 }
 
 #[test]
 fn test_stz() {
-    todo!()
+    let mut devices = UxnTestBus([0; 0x100]);
+    let mut machine = machine_from_source("|00 @cell $2 |0100 #abcd .cell STZ2");
+    machine.execute_vector(0x100, &mut devices);
+    assert_eq!(machine.memory[0], 0xab);
+    assert_eq!(machine.memory[1], 0xcd);
 }
 
 #[test]
 fn test_ldr() {
-    todo!()
+    assert_work_stack_state(",cell LDR2 BRK @cell abcd", &[0xab, 0xcd])
 }
 
 #[test]
 fn test_str() {
-    todo!()
+    assert_work_stack_state("#1234 ,cell STR2 BRK @cell $2", &[])
 }
 
 #[test]
 fn test_lda() {
-    todo!()
+    assert_work_stack_state(";cell LDA BRK @cell abcd", &[0xab])
 }
 
 #[test]
 fn test_sta() {
-    todo!()
+    assert_work_stack_state("#abcd ;cell STA BRK @cell $1", &[0xab])
 }
 
 #[test]

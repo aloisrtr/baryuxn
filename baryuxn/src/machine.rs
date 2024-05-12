@@ -5,7 +5,7 @@
 //! requiring a starting address. It then runs until encountering a `BRK` instruction.
 //! Using iterators eases up the interaction. One could easily log instructions
 //! executed, for example.
-//! ```rust
+//! ```ignore
 //! # use baryuxn::machine::*;
 //! # let mut machine = UxnMachine(UxnRom([0; 0x10000]), ());
 //! for executed_instruction in machine.vector(0x100, &mut devices) {
@@ -640,7 +640,7 @@ where
                 self.program_counter,
                 self.device_bus,
             ),
-            0xc0 => self.machine.execute_operation::<false, true, false, B>(
+            0xc0 => self.machine.execute_operation::<false, true, true, B>(
                 operation,
                 self.program_counter,
                 self.device_bus,

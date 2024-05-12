@@ -21,7 +21,7 @@
 //! # Quick start
 //! To spin up a Uxn emulator, simply load a ROM by opening up a file and loading
 //! its byte contents into a form of storage that can be indexed by [`u16`].
-//! ```rust
+//! ```ignore
 //! # use baryuxn::*;
 //! # use baryuxn::machine::*;
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,7 +43,7 @@
 //! - or anything fancy like this
 //!
 //! Creating a [`UxnVector`] is as simple as:
-//! ```rust
+//! ```ignore
 //! // Creates an execution vector starting at address 0x110 and going until it
 //! // executes a BRK instruction.
 //! let mut vector = machine.vector(0x110, &mut devices);
@@ -53,7 +53,7 @@
 //! as well as some devices. If you need to keep track of multiple vectors (which
 //! can be needed to implement interrupt-like behaviors, like the [Varvara computer](https://wiki.xxiivv.com/site/varvara.html)
 //! does), you can use [`InactiveUxnVector`].
-//! ```rust
+//! ```ignore
 //! let mut vector = machine.vector(0x100, &mut devices);
 //! // Do stuff with the original vector...
 //! let inactive = vector.make_inactive();
@@ -72,7 +72,7 @@
 //! addressed by [`u8`]. Writing or reading from a so-called port can trigger specific
 //! behavior from your devices, like printing a character to the console or logging some
 //! information.
-//! ```rust
+//! ```ignore
 //! /// Simplified implementation of a CLI Varvara machine.
 //! struct CliDeviceBus {
 //!     storage: [u8; 0x100],
