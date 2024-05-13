@@ -1,5 +1,12 @@
-use std::{collections::VecDeque, fs::File, io::Read};
+use std::{
+    collections::VecDeque,
+    fs::File,
+    io::{stdout, BufReader, Read, Write},
+    path::Path,
+    sync::mpsc::TryRecvError,
+};
 
+use baryasm::UxnTalAssembler;
 use baryuxn::{
     machine::{InactiveUxnVector, UxnMachine},
     UxnArrayRom, UxnDeviceBus,
@@ -19,6 +26,11 @@ impl CliDeviceBus {
             debug,
             should_quit: false,
         }
+    }
+    pub fn write_character(&mut self, b: u8) -> InactiveUxnVector {
+        self.storage[0x12] = b;
+        self.storage[0x17] = if b == 0 { 0x04 } else { 0x01 };
+        InactiveUxnVector(u16::from_be_bytes([self.storage[0x10], self.storage[0x11]]))
     }
 }
 impl<T> UxnDeviceBus<T> for CliDeviceBus {
@@ -77,11 +89,19 @@ impl<T> UxnDeviceBus<T> for CliDeviceBus {
             },
             0x10 => match port {
                 // Console
-                0x08 => print!("{}", byte as char),
-                0x09 => eprint!("{}", byte as char),
+                0x08 => {
+                    print!("{}", byte as char);
+                    stdout().flush().unwrap()
+                }
+                0x09 => {
+                    eprint!("{}", byte as char);
+                    stdout().flush().unwrap()
+                }
                 _ => {}
             },
-            0xa0..=0xb0 => todo!(), // File
+            0xa0..=0xb0 => {
+                todo!("File operations not yet implemented")
+            } // File
             _ => {}
         }
     }
@@ -106,28 +126,70 @@ fn main() {
             rom_path = arg.clone()
         }
     } else {
-        println!("expected usage: baryuxn-cli [-v] ROM [args..]");
+        println!("expected usage: baryuxn-cli [-v] ROM|TAL [args..]");
         return;
     }
 
-    // Read ROM
-    let mut rom = [0; 0x10000];
-    File::open(rom_path)
-        .unwrap()
-        .read(&mut rom[0x100..])
-        .unwrap();
+    // Read/compile ROM
+    let rom = match Path::new(&rom_path)
+        .extension()
+        .map(|s| s.to_str().unwrap())
+    {
+        Some("tal") => UxnTalAssembler::<'_, 0x10000>::new()
+            .parse(
+                BufReader::new(File::open(rom_path).unwrap())
+                    .bytes()
+                    .map(|e| e.unwrap()),
+            )
+            .unwrap(),
+        Some("rom") => {
+            let mut rom = [0; 0x10000];
+            File::open(rom_path)
+                .unwrap()
+                .read(&mut rom[0x100..])
+                .unwrap();
+            rom
+        }
+        _ => {
+            println!("Requires either a .rom or .tal file as input");
+            return;
+        }
+    };
 
     // Create our machine
     let mut devices = CliDeviceBus::new(debug);
     let mut machine = UxnMachine::new(UxnArrayRom { data: rom });
 
+    // Listening to stdin
+    let stdin_channel = {
+        let (tx, rx) = std::sync::mpsc::channel::<u8>();
+        std::thread::spawn(move || loop {
+            let mut buffer = [0];
+            std::io::stdin().read(&mut buffer).unwrap();
+            tx.send(buffer[0]).unwrap()
+        });
+        rx
+    };
+
     // Evaluate the ROM
     let mut vector_queue = VecDeque::from([InactiveUxnVector(0x100)]);
+    // As a means of initialization, the first vector of the program is executed,
+    // then arguments passed are parsed
     while !devices.should_quit {
+        // Read from stdin and execute vector if there is a character.
+        match stdin_channel.try_recv() {
+            Ok(b) => {
+                let vector = devices.write_character(b);
+                machine.execute_vector(vector.0, &mut devices)
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => panic!("stdin was closed unexpectedly"),
+        }
+
         let mut vector = if let Some(inactive_vector) = vector_queue.pop_back() {
             inactive_vector.make_active(&mut machine, &mut devices)
         } else {
-            break;
+            continue;
         };
 
         if let Some(_instruction) = vector.next() {
