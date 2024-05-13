@@ -1,10 +1,9 @@
 use std::{
-    borrow::Borrow,
     collections::VecDeque,
-    ffi::OsStr,
     fs::File,
     io::{stdout, BufReader, Read, Write},
     path::Path,
+    sync::mpsc::TryRecvError,
 };
 
 use baryasm::UxnTalAssembler;
@@ -28,9 +27,10 @@ impl CliDeviceBus {
             should_quit: false,
         }
     }
-
-    pub fn get_console_vector(&self) -> u16 {
-        u16::from_be_bytes([self.storage[0x10], self.storage[0x11]])
+    pub fn write_character(&mut self, b: u8) -> InactiveUxnVector {
+        self.storage[0x12] = b;
+        self.storage[0x17] = if b == 0 { 0x04 } else { 0x01 };
+        InactiveUxnVector(u16::from_be_bytes([self.storage[0x10], self.storage[0x11]]))
     }
 }
 impl<T> UxnDeviceBus<T> for CliDeviceBus {
@@ -160,19 +160,31 @@ fn main() {
     let mut devices = CliDeviceBus::new(debug);
     let mut machine = UxnMachine::new(UxnArrayRom { data: rom });
 
+    // Listening to stdin
+    let stdin_channel = {
+        let (tx, rx) = std::sync::mpsc::channel::<u8>();
+        std::thread::spawn(move || loop {
+            let mut buffer = [0];
+            std::io::stdin().read(&mut buffer).unwrap();
+            tx.send(buffer[0]).unwrap()
+        });
+        rx
+    };
+
     // Evaluate the ROM
     let mut vector_queue = VecDeque::from([InactiveUxnVector(0x100)]);
     // As a means of initialization, the first vector of the program is executed,
     // then arguments passed are parsed
-    let mut input = [0];
     while !devices.should_quit {
         // Read from stdin and execute vector if there is a character.
-        // if std::io::stdin().read_exact(&mut input).is_ok() {
-        //     let c = input[0];
-        //     devices.storage[0x12] = c;
-        //     devices.storage[0x17] = if c == 0 { 0x03 } else { 0x01 };
-        //     machine.execute_vector(devices.get_console_vector(), &mut devices);
-        // }
+        match stdin_channel.try_recv() {
+            Ok(b) => {
+                let vector = devices.write_character(b);
+                machine.execute_vector(vector.0, &mut devices)
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => panic!("stdin was closed unexpectedly"),
+        }
 
         let mut vector = if let Some(inactive_vector) = vector_queue.pop_back() {
             inactive_vector.make_active(&mut machine, &mut devices)
@@ -180,7 +192,7 @@ fn main() {
             continue;
         };
 
-        if let Some(instruction) = vector.next() {
+        if let Some(_instruction) = vector.next() {
             vector_queue.push_front(vector.make_inactive())
         }
     }
