@@ -11,7 +11,8 @@ use baryuxn::{
     machine::{InactiveUxnVector, UxnMachine},
     UxnArrayRom, UxnDeviceBus,
 };
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Local, Offset, TimeZone, Timelike, Utc};
+use chrono_tz::Tz;
 
 /// Defines how the Uxn stack machine will interact with SDL peripherals.
 struct CliDeviceBus {
@@ -56,9 +57,21 @@ impl<T> UxnDeviceBus<T> for CliDeviceBus {
                     0x05 => time.minute() as u8,
                     0x06 => time.second() as u8,
                     0x07 => time.weekday() as u8,
-                    0x08 => todo!(), // TODO: day of the year
-                    0x09 => todo!(), // TODO: day of the year
-                    0x0a => todo!(), // TODO: daytime savings
+                    0x08 => (time.ordinal0() >> 8) as u8,
+                    0x09 => (time.ordinal() & 0xff) as u8,
+                    0x0a => {
+                        let utc = time.with_timezone(&Utc);
+                        let tz: Tz = time.offset().to_string().parse().unwrap_or(chrono_tz::UTC);
+                        let tz_time = utc.with_timezone(&tz);
+                        let standard_offset = tz
+                            .with_ymd_and_hms(time.year(), 1, 1, 0, 0, 0)
+                            .unwrap()
+                            .offset()
+                            .fix()
+                            .local_minus_utc();
+                        let current_offset = tz_time.offset().fix().local_minus_utc();
+                        (standard_offset != current_offset) as u8
+                    }
                     _ => self.storage[address as usize],
                 }
             }
