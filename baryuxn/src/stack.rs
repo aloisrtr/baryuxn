@@ -516,7 +516,7 @@ impl<'a> Iterator for UxnStackIter<'a> {
         (256, Some(256))
     }
 }
-impl<'a> DoubleEndedIterator for UxnStackIter<'a> {
+impl DoubleEndedIterator for UxnStackIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if let Some((first, rest)) = self.right.split_first() {
             self.right = rest;
@@ -529,12 +529,12 @@ impl<'a> DoubleEndedIterator for UxnStackIter<'a> {
         }
     }
 }
-impl<'a> ExactSizeIterator for UxnStackIter<'a> {
+impl ExactSizeIterator for UxnStackIter<'_> {
     fn len(&self) -> usize {
         256
     }
 }
-impl<'a> FusedIterator for UxnStackIter<'a> {}
+impl FusedIterator for UxnStackIter<'_> {}
 
 /// Iterator over the values of a [`UxnStack`], starting from the current stack pointer
 /// and going back up the stack until it loops. Elements can be modified individually.
@@ -576,7 +576,7 @@ impl<'a> Iterator for UxnStackIterMut<'a> {
         (256, Some(256))
     }
 }
-impl<'a> DoubleEndedIterator for UxnStackIterMut<'a> {
+impl DoubleEndedIterator for UxnStackIterMut<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if let Some((first, rest)) = core::mem::take(&mut self.right).split_first_mut() {
             self.right = rest;
@@ -589,9 +589,9 @@ impl<'a> DoubleEndedIterator for UxnStackIterMut<'a> {
         }
     }
 }
-impl<'a> ExactSizeIterator for UxnStackIterMut<'a> {
+impl ExactSizeIterator for UxnStackIterMut<'_> {
     fn len(&self) -> usize {
         256
     }
 }
-impl<'a> FusedIterator for UxnStackIterMut<'a> {}
+impl FusedIterator for UxnStackIterMut<'_> {}
